@@ -11,7 +11,7 @@
 //!
 //! 1. **Implement [`State`] trait**: Provides game state management and move application with associated Action type
 //! 2. **Implement [`StaticEvaluator`] trait**: Evaluates how good a position is for each player
-//! 3. **Implement [`ResponseGenerator`] trait**: Generates all possible moves from a position
+//! 3. **Implement [`ResponseGenerator`](minimax::ResponseGenerator) trait**: Generates all possible moves from a position
 //! 4. **Use [`search`](minimax::search)**: Combines everything to find the optimal move
 //! 5. **Use [`TranspositionTable`]**: Caches evaluations for better performance
 //!
@@ -129,6 +129,7 @@
 //! }
 //! ```
 
+pub mod mcts;
 pub mod minimax;
 pub mod state;
 pub mod static_evaluator;

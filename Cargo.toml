@@ -6,6 +6,7 @@ description = "Basic components for implementing an AI player in a two-person hi
 authors = ["John Bolton"]
 
 [dependencies]
+indextree = "4.7"
 serde_json = { version = "1.0", optional = true }
 static_assertions = "1.1"
 

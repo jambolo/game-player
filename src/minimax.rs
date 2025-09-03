@@ -46,15 +46,11 @@ struct Response<S> {
 }
 
 // Holds static information pertaining to the search.
-struct Context<'a, S, E: StaticEvaluator<S>, R: ResponseGenerator<State = S>>
-where
-    S: State,
-{
+struct Context<'a, S: State> {
     max_depth: i32,
-    rg: &'a R,
-    sef: &'a E,
+    rg: &'a dyn ResponseGenerator<State = S>,
+    sef: &'a dyn StaticEvaluator<S>,
     tt: &'a Rc<RefCell<TranspositionTable>>,
-    _phantom: std::marker::PhantomData<S>,
 }
 /// Response generator function object trait.
 ///
@@ -130,12 +126,6 @@ pub trait ResponseGenerator {
 /// This function performs a complete minimax search to find the best move for the current player. It uses alpha-beta pruning for
 /// efficiency and a transposition table to avoid redundant calculations.
 ///
-/// # Type Parameters
-/// * `S` - Game state type that implements the `State<A>` trait
-/// * `E` - Static evaluator type that implements `StaticEvaluator<S>`
-/// * `A` - Action/move type used by the game
-/// * `R` - Response generator type that implements `ResponseGenerator<S>`
-///
 /// # Arguments
 /// * `tt` - A transposition table for caching previously computed positions. Can be reused across multiple searches.
 /// * `sef` - The static evaluation function
@@ -174,24 +164,18 @@ pub trait ResponseGenerator {
 /// - **Alpha-beta pruning**: Early termination of unpromising branches
 /// - **Transposition table**: Caching of previously evaluated positions
 /// - **Move ordering**: Better moves searched first for more effective pruning
-pub fn search<S, E, R>(
+pub fn search<S: State>(
     tt: &Rc<RefCell<TranspositionTable>>,
-    sef: &E,
-    rg: &R,
+    sef: &impl StaticEvaluator<S>,
+    rg: &impl ResponseGenerator<State = S>,
     s0: &Rc<S>,
     max_depth: i32,
-) -> Option<Rc<S>>
-where
-    S: State,
-    E: StaticEvaluator<S>,
-    R: ResponseGenerator<State = S>,
-{
+) -> Option<Rc<S>> {
     let context = Context {
         tt,
         sef,
         rg,
         max_depth,
-        _phantom: std::marker::PhantomData,
     };
     if s0.whose_turn() == PlayerId::ALICE as u8 {
         if let Some(response) = alice_search(&context, s0, -f32::INFINITY, f32::INFINITY, 0) {
@@ -206,18 +190,13 @@ where
 }
 
 // Evaluates all of Alice's possible responses to the given state. The returned response is the one with the highest value.
-fn alice_search<S, E, R>(
-    context: &Context<S, E, R>,
+fn alice_search<S: State>(
+    context: &Context<S>,
     state: &Rc<S>,
     mut alpha: f32,
     beta: f32,
     depth: i32,
-) -> Option<Response<S>>
-where
-    S: State,
-    E: StaticEvaluator<S>,
-    R: ResponseGenerator<State = S>,
-{
+) -> Option<Response<S>> {
     // Depth of responses to this state
     let response_depth = depth + 1;
     // Quality of a response as a result of a search at this depth.
@@ -327,18 +306,13 @@ where
 }
 
 // Evaluates all of Bob's possible responses to the given state. The returned response is the one with the lowest value.
-fn bob_search<S, E, R>(
-    context: &Context<S, E, R>,
+fn bob_search<S: State>(
+    context: &Context<S>,
     state: &Rc<S>,
     alpha: f32,
     mut beta: f32,
     depth: i32,
-) -> Option<Response<S>>
-where
-    S: State,
-    E: StaticEvaluator<S>,
-    R: ResponseGenerator<State = S>,
-{
+) -> Option<Response<S>> {
     // Depth of responses to this state
     let response_depth = depth + 1;
     // Quality of a response as a result of a search at this depth.
@@ -447,16 +421,11 @@ where
 }
 
 // Generates a list of responses to the given node
-fn generate_responses<S, E, R>(
-    context: &Context<S, E, R>,
+fn generate_responses<S: State>(
+    context: &Context<S>,
     state: &Rc<S>,
     depth: i32,
-) -> Vec<Response<S>>
-where
-    S: State,
-    E: StaticEvaluator<S>,
-    R: ResponseGenerator<State = S>,
-{
+) -> Vec<Response<S>> {
     // Handle the case where node.state might be None
     let responses = context.rg.generate(state, depth);
     responses
@@ -474,15 +443,10 @@ where
 }
 
 // Get a preliminary value of the state from the static evaluator or the transposition table
-fn get_preliminary_value<S, E, R>(
-    context: &Context<S, E, R>,
+fn get_preliminary_value<S: State>(
+    context: &Context<S>,
     state: &Rc<S>,
-) -> (f32, i16)
-where
-    S: State,
-    E: StaticEvaluator<S>,
-    R: ResponseGenerator<State = S>,
-{
+) -> (f32, i16) {
     // SEF optimization:
     // Since any value of any state in the T-table has already been computed by search and/or SEF, it has a quality that is at
     // least as good as the quality of the value returned by the SEF. So, if the state being evaluated is in the T-table, then
