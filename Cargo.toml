@@ -2,5 +2,16 @@
 name = "hidden-game-player"
 version = "0.1.0"
 edition = "2024"
+description = "Basic components for implementing an AI player in a two-person hidden information game"
+authors = ["John Bolton"]
 
 [dependencies]
+serde_json = { version = "1.0", optional = true }
+static_assertions = "1.1"
+
+[features]
+default = []
+analysis_game_tree = ["serde_json"]
+analysis_game_state = ["serde_json"]
+analysis_transposition_table = ["serde_json"]
+debug_game_tree_node_info = []
