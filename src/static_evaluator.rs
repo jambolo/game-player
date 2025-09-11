@@ -1,4 +1,6 @@
-use crate::game_state::GameState;
+//! Static Evaluation Function
+//!
+//! This module defines the `StaticEvaluator` trait, which provides an interface for static evaluation functions.
 
 /// An interface for static evaluation functions.
 ///
@@ -8,7 +10,7 @@ use crate::game_state::GameState;
 /// The values returned by the static evaluation function should be in the range [bobWinsValue(), aliceWinsValue()].
 /// If the game is over and Alice has won, then the function should return aliceWinsValue(). If the game is over and
 /// Bob has won, then the function should return bobWinsValue().
-pub trait StaticEvaluator<G: GameState> {
+pub trait StaticEvaluator<G> {
     /// Evaluates the given state and returns its value from Alice's perspective.
     ///
     /// # Arguments

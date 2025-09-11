@@ -12,25 +12,29 @@ The hidden-game-player crate implements the basic components of a generic player
 
 - **`GameState` trait**: Abstract representation of game states with fingerprinting
 - **`StaticEvaluator` trait**: Interface for static position evaluation functions
-- **`TranspositionTable`**: High-performance cache for game state values
+- **`TranspositionTable`**: Cache for game state values
+- **`ResponseGenerator`**: Signature for the method that generates all possible responses to a state
+- **`Action` trait**: Abstract representation of a move by a player.
 
 ### Game Tree Search
 
 - **`GameTree`**: Complete implementation of min-max search with alpha-beta pruning
 - Support for configurable search depth
-- Transposition table integration for performance optimization
-- Comprehensive analysis and debugging features
+- Transposition table integration with relevance and value quality enhancements.
+- Supports two-player game only
 
-## Key Features
+### Monte Carlo Tree Search
 
-- **Generic Design**: Works with any two-player hidden information game
-- **High Performance**: Optimized with alpha-beta pruning and transposition tables
-- **Analysis Support**: Optional detailed performance analysis and debugging
-- **Memory Efficient**: Optimized data structures and memory usage
+- **`MonteCarloTreeSearch`**: Monte Carlo Tree Search implementation with UCT-based node selection.
+- Configurable iteration count
+- Four-phase algorithm (Selection, Expansion, Rollout, Back-propagation)
+- Configurable exploration constant
+- Static evaluation integration
+- Supports two-player game only
 
 ## Usage
 
-### Basic Player Implementation
+### Basic MCTS Player Implementation
 
 ```rust
 use hidden_game_player::{Player, GameState, Action};
@@ -55,15 +59,15 @@ impl Player for MyPlayer {
 }
 ```
 
-### Game Tree Search
+### Basic Minimax Player Implementation
 
 ```rust
-use hidden_game_player::{GameTree, GameState, StaticEvaluator, TranspositionTable};
-use std::sync::Arc;
+use hidden_game_player::{Action, GameTree, GameState, StaticEvaluator, TranspositionTable};
+use std::sync::Rc;
 
 // Create components
-let transposition_table = Arc::new(TranspositionTable::new(1000000, 100));
-let static_evaluator = Arc::new(MyEvaluator::new());
+let transposition_table = Rc::new(TranspositionTable::new(1000000, 100));
+let static_evaluator = Rc::new(MyEvaluator::new());
 let response_generator = Box::new(|state, depth| {
     // Generate all possible moves from this state
     generate_moves(state, depth)
@@ -78,7 +82,7 @@ let game_tree = GameTree::new(
 );
 
 // Find best move
-let mut current_state = Arc::new(my_game_state);
+let mut current_state = Rc::new(my_game_state);
 game_tree.find_best_response(&mut current_state);
 ```
 
@@ -102,12 +106,12 @@ impl GameState for MyGameState {
         todo!()
     }
     
-    fn response(&self) -> Option<Arc<dyn GameState>> {
+    fn response(&self) -> Option<Rc<dyn GameState>> {
         // Return the chosen response, if any
         todo!()
     }
     
-    fn set_response(&mut self, response: Option<Arc<dyn GameState>>) {
+    fn set_response(&mut self, response: Option<Rc<dyn GameState>>) {
         // Set the chosen response
         todo!()
     }
@@ -117,6 +121,7 @@ impl GameState for MyGameState {
 ## Features
 
 ### Analysis Features
+
 Enable detailed performance analysis:
 
 ```toml
@@ -125,6 +130,7 @@ hidden-game-player = { path = "...", features = ["analysis_game_tree", "analysis
 ```
 
 ### Debug Features
+
 Enable debugging output:
 
 ```toml

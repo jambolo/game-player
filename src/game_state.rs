@@ -1,7 +1,7 @@
-//! Generic Hidden-Information Game Player
+//! Game State Interface
 //!
-//! This module implements the components for a generic two-player hidden-information game player. It provides the necessary
-//! interface for interacting with the game-specific state and logic.
+//! This module implements the game state components and traits, providing the necessary interface for the game-specific state and
+//! logic.
 
 /// IDs of the players in a two-player game.
 ///
@@ -39,7 +39,7 @@ impl PlayerId {
     }
 }
 
-/// An abstract game state that a player can interact with to analyze the game.
+/// A trait representing the game state.
 ///
 /// This trait defines the core interface that a game-specific game state must implement.
 ///
@@ -62,22 +62,23 @@ impl PlayerId {
 /// - Principal variation storage
 /// - Game tree navigation
 ///
-/// # Thread Safety
-/// Implementations should be thread-safe when used with `Arc` since game states may be shared between multiple analysis threads.
-///
 /// # Examples
 ///
 /// ```rust
 /// # use hidden_game_player::{GameState, PlayerId};
-/// # use std::sync::Arc;
 ///
+/// #[derive(Clone, Default)]
+/// struct MyAction;
+///
+/// #[derive(Clone, Copy)]
 /// struct MyGameState {
 ///     board: [u8; 64],
 ///     current_player: PlayerId,
+///     game_over: bool,
 ///     // other game-specific fields...
 /// }
 ///
-/// impl GameState for MyGameState {
+/// impl GameState<MyAction> for MyGameState {
 ///     fn fingerprint(&self) -> u64 {
 ///         // Generate unique hash for this position
 ///         // Implementation depends on game specifics
@@ -87,9 +88,21 @@ impl PlayerId {
 ///     fn whose_turn(&self) -> u8 {
 ///         self.current_player as u8
 ///     }
+///
+///     fn is_terminal(&self) -> bool {
+///         self.game_over
+///     }
+///
+///     fn apply(&self, _action: &MyAction) -> Self {
+///         MyGameState {
+///             board: self.board,
+///             current_player: self.current_player.other(),
+///             game_over: false,
+///         }
+///     }
 /// }
 /// ```
-pub trait GameState: Sized {
+pub trait GameState<A>: Sized {
     /// Returns a unique fingerprint (hash) for this game state.
     ///
     /// The fingerprint must be statistically unique across all possible game states to avoid hash collisions in transposition
@@ -108,10 +121,15 @@ pub trait GameState: Sized {
     ///
     /// ```rust
     /// # use hidden_game_player::{GameState, PlayerId};
+    /// # #[derive(Clone, Default)]
+    /// # struct MyAction;
+    /// # #[derive(Clone, Copy)]
     /// # struct MyGameState { current_player: PlayerId }
-    /// # impl GameState for MyGameState {
+    /// # impl GameState<MyAction> for MyGameState {
     /// #     fn fingerprint(&self) -> u64 { 42 }
     /// #     fn whose_turn(&self) -> u8 { self.current_player as u8 }
+    /// #     fn is_terminal(&self) -> bool { false }
+    /// #     fn apply(&self, _action: &MyAction) -> Self { *self }
     /// # }
     /// # fn create_initial_state() -> MyGameState { MyGameState { current_player: PlayerId::ALICE } }
     /// let state = create_initial_state();
@@ -131,10 +149,15 @@ pub trait GameState: Sized {
     /// # Examples
     /// ```rust
     /// # use hidden_game_player::{GameState, PlayerId};
+    /// # #[derive(Clone, Default)]
+    /// # struct MyAction;
+    /// # #[derive(Clone, Copy)]
     /// # struct MyGameState { current_player: PlayerId }
-    /// # impl GameState for MyGameState {
+    /// # impl GameState<MyAction> for MyGameState {
     /// #     fn fingerprint(&self) -> u64 { 42 }
     /// #     fn whose_turn(&self) -> u8 { self.current_player as u8 }
+    /// #     fn is_terminal(&self) -> bool { false }
+    /// #     fn apply(&self, _action: &MyAction) -> Self { *self }
     /// # }
     /// # fn create_initial_state() -> MyGameState { MyGameState { current_player: PlayerId::ALICE } }
     /// let state = create_initial_state();
@@ -145,6 +168,86 @@ pub trait GameState: Sized {
     /// }
     /// ```
     fn whose_turn(&self) -> u8;
+
+    /// Checks if the game cannot continue.
+    ///
+    /// # Returns
+    /// `true` if the game cannot continue, `false` otherwise.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use hidden_game_player::{GameState, PlayerId};
+    /// # #[derive(Clone, Default)]
+    /// # struct MyAction;
+    /// # #[derive(Clone, Copy)]
+    /// # struct MyGameState { game_is_over: bool }
+    /// # impl GameState<MyAction> for MyGameState {
+    /// #     fn fingerprint(&self) -> u64 { 42 }
+    /// #     fn whose_turn(&self) -> u8 { 0 }
+    /// #     fn is_terminal(&self) -> bool { self.game_is_over }
+    /// #     fn apply(&self, _action: &MyAction) -> Self { *self }
+    /// # }
+    /// let state = MyGameState { game_is_over: true };
+    /// assert!(state.is_terminal());
+    /// ```
+    fn is_terminal(&self) -> bool;
+
+    /// Applies an action to the current game state, returning a new game state as a result of the action.
+    ///
+    /// This method creates a new game state by applying the given action to the current state.
+    /// The original state remains unchanged (immutable transformation).
+    ///
+    /// # Arguments
+    /// * `action` - The action to apply to the current game state
+    ///
+    /// # Returns
+    /// A new game state representing the position after applying the action
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use hidden_game_player::{GameState, PlayerId};
+    /// # 
+    /// # #[derive(Debug, Clone, Default)]
+    /// # struct MyAction { move_type: String }
+    /// # 
+    /// # struct MyGameState { 
+    /// #     current_player: PlayerId,
+    /// #     move_count: u32,
+    /// #     game_over: bool 
+    /// # }
+    /// # 
+    /// # impl GameState<MyAction> for MyGameState {
+    /// #     fn fingerprint(&self) -> u64 { 
+    /// #         (self.current_player as u64) << 32 | self.move_count as u64 
+    /// #     }
+    /// #     fn whose_turn(&self) -> u8 { self.current_player as u8 }
+    /// #     fn is_terminal(&self) -> bool { self.game_over }
+    /// #     fn apply(&self, action: &MyAction) -> Self {
+    /// #         MyGameState {
+    /// #             current_player: self.current_player.other(),
+    /// #             move_count: self.move_count + 1,
+    /// #             game_over: self.move_count >= 10,
+    /// #         }
+    /// #     }
+    /// # }
+    /// 
+    /// let initial_state = MyGameState { 
+    ///     current_player: PlayerId::ALICE,
+    ///     move_count: 0,
+    ///     game_over: false 
+    /// };
+    /// let action = MyAction { move_type: "play_tile".to_string() };
+    /// 
+    /// let new_state = initial_state.apply(&action);
+    /// 
+    /// // State should be updated
+    /// assert_eq!(new_state.whose_turn(), PlayerId::BOB as u8);
+    /// assert_ne!(new_state.fingerprint(), initial_state.fingerprint());
+    /// 
+    /// // Original state unchanged
+    /// assert_eq!(initial_state.whose_turn(), PlayerId::ALICE as u8);
+    /// ```
+    fn apply(&self, action: &A) -> Self;
 }
 
 #[cfg(test)]

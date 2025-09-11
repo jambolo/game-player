@@ -1,21 +1,22 @@
-//! Generic Game Tree Search Implementation
+//! Minimax Game Tree Search Implementation
 //!
 //! This module implements a game tree search using min-max strategy, alpha-beta pruning, and a transposition table. The
-//! game-specific components are provided at run-time.
+//! game-specific components are provided by the user using the traits defined in the game_state module.
 
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::marker::PhantomData;
 
-use crate::game_state::{GameState, PlayerId};
-use crate::static_evaluator::StaticEvaluator;
-use crate::transposition_table::TranspositionTable;
+use crate::game_state::*;
+use crate::static_evaluator::*;
+use crate::transposition_table::*;
 
 static SEF_QUALITY: i16 = 0; // Quality of a value returned by the static evaluation function
 
 // Struct for holding information about a game state response.
-struct Response<G: GameState> {
+struct Response<G> {
     // Reference to the responding game state
-    state: Arc<G>,
+    state: Rc<G>,
     // Value of the responding state
     value: f32,
     // Quality of the value. Quality is the number of plies searched to find the value.
@@ -23,41 +24,52 @@ struct Response<G: GameState> {
 }
 
 /// Response generator function object type.
-/// 
-/// # Arguments
-/// * `state` - state to respond to
-/// * `depth` - current ply
-/// 
-/// # Returns
-/// list of all possible responses
-/// 
-/// # Note
-/// The caller gains ownership of the returned states.
-/// 
-/// # Note
-/// Returning no responses simply indicates that the player cannot respond. It does not necessarily indicate that the game is
-/// over or that the player has passed. If passing is allowed, then a pass should be a valid response.
+///
+/// # Type Parameters
+/// * `G` - Game state type
+pub trait ResponseGenerator<G> {
+    /// Generates a list of all possible responses to the given state.
+    ///
+    /// # Arguments
+    /// * `state` - state to respond to
+    /// * `depth` - current ply
+    ///
+    /// # Returns
+    /// list of all possible responses
+    ///
+    /// # Note
+    /// The caller gains ownership of the returned states.
+    ///
+    /// # Note
+    /// Returning no responses indicates that the player cannot respond. It does not necessarily indicate that the game is
+    /// over or that the player has passed. If passing is allowed, then a pass should be a valid response.
+    fn generate(&self, state: &Rc<G>, depth: i32) -> Vec<Box<G>>;
+}
 
 /// A game tree search implementation using minimax strategy, alpha-beta pruning, and a transposition table.
-pub struct GameTree<G: GameState, E: StaticEvaluator<G>, R>
-where
-    R: Fn(&Arc<G>, i32) -> Vec<Box<G>>,
+///
+/// # Type Parameters
+/// * `G` - Game state type
+/// * `E` - Static evaluator type
+/// * `A` - Action type
+/// * `R` - Response generator type
+pub struct GameTree<G: GameState<A>, E: StaticEvaluator<G>, A, R: ResponseGenerator<G>>
 {
     /// Transposition table (persistent)
-    transposition_table: Arc<Mutex<TranspositionTable>>,
+    transposition_table: Rc<RefCell<TranspositionTable>>,
     /// Static evaluation function (persistent)
-    static_evaluator: Arc<E>,
+    static_evaluator: Rc<E>,
     /// Response generator (persistent)
     response_generator: R,
     /// How many plies to search
     max_depth: i32,
-    /// Phantom data to indicate G is used
-    _phantom: PhantomData<G>,
+    /// Phantom data to indicate G is used as a type constraint
+    _phantom_g: PhantomData<G>,
+    /// Phantom data to indicate A is used as a type constraint
+    _phantom_a: PhantomData<A>,
 }
 
-impl<G: GameState, E: StaticEvaluator<G>, R> GameTree<G, E, R> 
-where
-    R: Fn(&Arc<G>, i32) -> Vec<Box<G>>,
+impl<G: GameState<A>, E: StaticEvaluator<G>, A, R: ResponseGenerator<G>> GameTree<G, E, A, R>
 {
     /// Creates a new game tree.
     ///
@@ -66,13 +78,14 @@ where
     /// * `sef` - The static evaluation function
     /// * `rg` - The response generator
     /// * `max_depth` - The maximum number of plies to search
-    pub fn new(tt: &Arc<Mutex<TranspositionTable>>, sef: &Arc<E>, rg: R, max_depth: i32) -> Self {
+    pub fn new(tt: &Rc<RefCell<TranspositionTable>>, sef: &Rc<E>, rg: R, max_depth: i32) -> Self {
         Self {
-            transposition_table: Arc::clone(&tt),
-            static_evaluator: Arc::clone(&sef),
+            transposition_table: Rc::clone(tt),
+            static_evaluator: Rc::clone(sef),
             response_generator: rg,
             max_depth,
-            _phantom: PhantomData,
+            _phantom_g: PhantomData,
+            _phantom_a: PhantomData,
         }
     }
 
@@ -83,21 +96,21 @@ where
     ///
     /// # Returns
     /// A reference to the best response's state.
-    pub fn find_best_response(&self, s0: &Arc<G>) -> Option<Arc<G>> {
+    pub fn find_best_response(&self, s0: &Rc<G>) -> Option<Rc<G>> {
         if s0.whose_turn() == PlayerId::ALICE as u8 {
             if let Some(response) = self.alice_search(s0, -f32::INFINITY, f32::INFINITY, 0) {
-                return Some(Arc::clone(&response.state));
+                return Some(Rc::clone(&response.state));
             }
         } else {
             if let Some(response) = self.bob_search(s0, -f32::INFINITY, f32::INFINITY, 0) {
-                return Some(Arc::clone(&response.state));
+                return Some(Rc::clone(&response.state));
             }
         }
         None
     }
 
     // Evaluates all of Alice's possible responses to the given state. The returned response is the one with the highest value.
-    fn alice_search(&self, state: &Arc<G>, mut alpha: f32, beta: f32, depth: i32) -> Option<Response<G>> {
+    fn alice_search(&self, state: &Rc<G>, mut alpha: f32, beta: f32, depth: i32) -> Option<Response<G>> {
         // Depth of responses to this state
         let response_depth = depth + 1;
         // Quality of a response as a result of a search at this depth.
@@ -117,11 +130,11 @@ where
         });
 
         // Evaluate each of the responses and choose the one with the highest value
-        let mut best_state: Option<Arc<G>> = None;
+        let mut best_state: Option<Rc<G>> = None;
         let mut best_value = -f32::INFINITY;
         let mut best_quality = -1;
         let mut pruned = false;
-        
+
         for mut response in responses {
             // Replace the preliminary value and quality of this response with the value and quality of Bob's subsequent response
             // to it.
@@ -145,7 +158,7 @@ where
             // Determine if this response's value is the best so far. If so, then save the value and do alpha-beta pruning
             if response.value > best_value {
                 // Save it
-                best_state = Some(Arc::clone(&response.state));
+                best_state = Some(Rc::clone(&response.state));
                 best_value = response.value;
                 best_quality = response.quality;
 
@@ -184,17 +197,15 @@ where
         assert!(best_state.is_some()); // Sanity check
 
         // Just in case
-        if best_state.is_none() {
-            return None;
-        }
+        best_state.as_ref()?;
 
         // At this point, the value of this state becomes the value of the best response to it, and the quality becomes its
         // quality + 1.
-        // 
+        //
         // Save the value of this state in the T-table if the ply was not pruned. Pruning results in an incorrect value because the
         // search was interrupted and potentially better responses were not considered.
         if !pruned {
-            self.transposition_table.lock().unwrap().update(state.fingerprint(), best_value, best_quality + 1);
+            self.transposition_table.borrow_mut().update(state.fingerprint(), best_value, best_quality + 1);
         }
 
         Some(Response::<G> {
@@ -205,7 +216,7 @@ where
     }
 
     // Evaluates all of Bob's possible responses to the given state. The returned response is the one with the lowest value.
-    fn bob_search(&self, state: &Arc<G>, alpha: f32, mut beta: f32, depth: i32) -> Option<Response<G>> {
+    fn bob_search(&self, state: &Rc<G>, alpha: f32, mut beta: f32, depth: i32) -> Option<Response<G>> {
         // Depth of responses to this state
         let response_depth = depth + 1;
         // Quality of a response as a result of a search at this depth.
@@ -225,11 +236,11 @@ where
         });
 
         // Evaluate each of the responses and choose the one with the lowest value
-        let mut best_state: Option<Arc<G>> = None;
+        let mut best_state: Option<Rc<G>> = None;
         let mut best_value = f32::INFINITY;
         let mut best_quality = -1;
         let mut pruned = false;
-        
+
         for mut response in responses {
             // Replace the preliminary value and quality of this response with the value and quality of Alice's subsequent response
             // to it.
@@ -253,7 +264,7 @@ where
             // Determine if this response's value is the best so far. If so, then save the value and do alpha-beta pruning
             if response.value < best_value {
                 // Save it
-                best_state = Some(Arc::clone(&response.state));
+                best_state = Some(Rc::clone(&response.state));
                 best_value = response.value;
                 best_quality = response.quality;
 
@@ -293,17 +304,15 @@ where
         assert!(best_state.is_some()); // Sanity check
 
         // Just in case
-        if best_state.is_none() {
-            return None;
-        }
+        best_state.as_ref()?;
 
         // At this point, the value of this state becomes the value of the best response to it, and the quality becomes its
         // quality + 1.
-        // 
+        //
         // Save the value of this state in the T-table if the ply was not pruned. Pruning results in an incorrect value because the
         // search was interrupted and potentially better responses were not considered.
         if !pruned {
-            self.transposition_table.lock().unwrap().update(state.fingerprint(), best_value, best_quality + 1);
+            self.transposition_table.borrow_mut().update(state.fingerprint(), best_value, best_quality + 1);
         }
 
         Some(Response::<G> {
@@ -314,14 +323,14 @@ where
     }
 
     // Generates a list of responses to the given node
-    fn generate_responses(&self, state: &Arc<G>, depth: i32) -> Vec<Response<G>> {
+    fn generate_responses(&self, state: &Rc<G>, depth: i32) -> Vec<Response<G>> {
         // Handle the case where node.state might be None
-        let responses = (self.response_generator)(state, depth);
+        let responses = self.response_generator.generate(state, depth);
         responses.into_iter().map(|state| {
-            let arc_state = Arc::from(state);
-            let (value, quality) = self.get_preliminary_value(&arc_state);
+            let rc_state = Rc::from(state);
+            let (value, quality) = self.get_preliminary_value(&rc_state);
             Response::<G> {
-                state: arc_state,
+                state: rc_state,
                 value,
                 quality,
             }
@@ -329,21 +338,20 @@ where
     }
 
     // Get a preliminary value of the state from the static evaluator or the transposition table
-    fn get_preliminary_value(&self, state: &Arc<G>) -> (f32, i16) {
+    fn get_preliminary_value(&self, state: &Rc<G>) -> (f32, i16) {
         // SEF optimization:
         // Since any value of any state in the T-table has already been computed by search and/or SEF, it has a quality that is at
         // least as good as the quality of the value returned by the SEF. So, if the state being evaluated is in the T-table, then
         // the value in the T-table is used instead of running the SEF because T-table lookup is so much faster than the SEF.
 
-        // If it is in the T-table then use that value, otherwise compute the value using SEF.
-        if let Some(result) = self.transposition_table.lock().unwrap().check(state.fingerprint(), -1) {
-            (result.value, result.quality)
-        }
-        else {
-            let value = self.static_evaluator.evaluate(state);
-            // Save the value of the state in the T-table
-            self.transposition_table.lock().unwrap().update(state.fingerprint(), value, SEF_QUALITY);
-            (value, SEF_QUALITY)
-        }
+        // If it is in the T-table then use that value, otherwise compute and save the value using SEF.
+        self.transposition_table.borrow_mut()
+            .check(state.fingerprint(), -1)
+            .unwrap_or_else(|| {
+                let value = self.static_evaluator.evaluate(state);
+                // Save the value of the state in the T-table
+                self.transposition_table.borrow_mut().update(state.fingerprint(), value, SEF_QUALITY);
+                (value, SEF_QUALITY)
+            })
     }
 }
