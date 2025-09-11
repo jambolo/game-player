@@ -1,6 +1,6 @@
 //! Game State Interface
 //!
-//! This module implements the game state components and traits, providing the necessary interface for the game-specific state and
+//! This module implements the state components and traits, providing the necessary interface for the game-specific state and
 //! logic.
 
 /// IDs of the players in a two-player game.
@@ -39,13 +39,13 @@ impl PlayerId {
     }
 }
 
-/// A trait representing the game state.
+/// A trait representing the state.
 ///
-/// This trait defines the core interface that a game-specific game state must implement.
+/// This trait defines the core interface that a game-specific state must implement.
 ///
 /// # Core Concepts
 /// ## Fingerprinting
-/// A game state must provide a unique fingerprint (hash) that can be used for:
+/// A state must provide a unique fingerprint (hash) that can be used for:
 /// - Transposition tables in game tree search
 /// - Duplicate position detection
 /// - State caching and memoization
@@ -65,7 +65,7 @@ impl PlayerId {
 /// # Examples
 ///
 /// ```rust
-/// # use hidden_game_player::{GameState, PlayerId};
+/// # use hidden_game_player::{State, PlayerId};
 ///
 /// #[derive(Clone, Default)]
 /// struct MyAction;
@@ -78,7 +78,7 @@ impl PlayerId {
 ///     // other game-specific fields...
 /// }
 ///
-/// impl GameState<MyAction> for MyGameState {
+/// impl State<MyAction> for MyGameState {
 ///     fn fingerprint(&self) -> u64 {
 ///         // Generate unique hash for this position
 ///         // Implementation depends on game specifics
@@ -102,8 +102,8 @@ impl PlayerId {
 ///     }
 /// }
 /// ```
-pub trait GameState<A>: Sized {
-    /// Returns a unique fingerprint (hash) for this game state.
+pub trait State<A>: Sized {
+    /// Returns a unique fingerprint (hash) for this state.
     ///
     /// The fingerprint must be statistically unique across all possible game states to avoid hash collisions in transposition
     /// tables and state caches. Identical game positions must always produce identical fingerprints.
@@ -112,7 +112,7 @@ pub trait GameState<A>: Sized {
     /// - **Deterministic**: Same position always produces same fingerprint
     /// - **Collision-resistant**: Different positions should produce different and uncorrelated fingerprints
     /// - **Fast**: Called frequently during game tree search
-    /// - **Position-dependent**: Only depends on the current game state and independent of move history.
+    /// - **Position-dependent**: Only depends on the current state and independent of move history.
     ///
     /// # Returns
     /// A 64-bit unsigned integer representing the unique fingerprint
@@ -120,12 +120,12 @@ pub trait GameState<A>: Sized {
     /// # Examples
     ///
     /// ```rust
-    /// # use hidden_game_player::{GameState, PlayerId};
+    /// # use hidden_game_player::{State, PlayerId};
     /// # #[derive(Clone, Default)]
     /// # struct MyAction;
     /// # #[derive(Clone, Copy)]
     /// # struct MyGameState { current_player: PlayerId }
-    /// # impl GameState<MyAction> for MyGameState {
+    /// # impl State<MyAction> for MyGameState {
     /// #     fn fingerprint(&self) -> u64 { 42 }
     /// #     fn whose_turn(&self) -> u8 { self.current_player as u8 }
     /// #     fn is_terminal(&self) -> bool { false }
@@ -134,7 +134,7 @@ pub trait GameState<A>: Sized {
     /// # fn create_initial_state() -> MyGameState { MyGameState { current_player: PlayerId::ALICE } }
     /// let state = create_initial_state();
     /// let fingerprint = state.fingerprint();
-    /// 
+    ///
     /// // Same position should produce same fingerprint
     /// let same_state = create_initial_state();
     /// assert_eq!(fingerprint, same_state.fingerprint());
@@ -148,12 +148,12 @@ pub trait GameState<A>: Sized {
     ///
     /// # Examples
     /// ```rust
-    /// # use hidden_game_player::{GameState, PlayerId};
+    /// # use hidden_game_player::{State, PlayerId};
     /// # #[derive(Clone, Default)]
     /// # struct MyAction;
     /// # #[derive(Clone, Copy)]
     /// # struct MyGameState { current_player: PlayerId }
-    /// # impl GameState<MyAction> for MyGameState {
+    /// # impl State<MyAction> for MyGameState {
     /// #     fn fingerprint(&self) -> u64 { 42 }
     /// #     fn whose_turn(&self) -> u8 { self.current_player as u8 }
     /// #     fn is_terminal(&self) -> bool { false }
@@ -176,12 +176,12 @@ pub trait GameState<A>: Sized {
     ///
     /// # Examples
     /// ```rust
-    /// # use hidden_game_player::{GameState, PlayerId};
+    /// # use hidden_game_player::{State, PlayerId};
     /// # #[derive(Clone, Default)]
     /// # struct MyAction;
     /// # #[derive(Clone, Copy)]
     /// # struct MyGameState { game_is_over: bool }
-    /// # impl GameState<MyAction> for MyGameState {
+    /// # impl State<MyAction> for MyGameState {
     /// #     fn fingerprint(&self) -> u64 { 42 }
     /// #     fn whose_turn(&self) -> u8 { 0 }
     /// #     fn is_terminal(&self) -> bool { self.game_is_over }
@@ -192,33 +192,33 @@ pub trait GameState<A>: Sized {
     /// ```
     fn is_terminal(&self) -> bool;
 
-    /// Applies an action to the current game state, returning a new game state as a result of the action.
+    /// Applies an action to the current state, returning a new state as a result of the action.
     ///
-    /// This method creates a new game state by applying the given action to the current state.
+    /// This method creates a new state by applying the given action to the current state.
     /// The original state remains unchanged (immutable transformation).
     ///
     /// # Arguments
-    /// * `action` - The action to apply to the current game state
+    /// * `action` - The action to apply to the current state
     ///
     /// # Returns
-    /// A new game state representing the position after applying the action
+    /// A new state representing the position after applying the action
     ///
     /// # Examples
     /// ```rust
-    /// # use hidden_game_player::{GameState, PlayerId};
-    /// # 
+    /// # use hidden_game_player::{State, PlayerId};
+    /// #
     /// # #[derive(Debug, Clone, Default)]
     /// # struct MyAction { move_type: String }
-    /// # 
-    /// # struct MyGameState { 
+    /// #
+    /// # struct MyGameState {
     /// #     current_player: PlayerId,
     /// #     move_count: u32,
-    /// #     game_over: bool 
+    /// #     game_over: bool
     /// # }
-    /// # 
-    /// # impl GameState<MyAction> for MyGameState {
-    /// #     fn fingerprint(&self) -> u64 { 
-    /// #         (self.current_player as u64) << 32 | self.move_count as u64 
+    /// #
+    /// # impl State<MyAction> for MyGameState {
+    /// #     fn fingerprint(&self) -> u64 {
+    /// #         (self.current_player as u64) << 32 | self.move_count as u64
     /// #     }
     /// #     fn whose_turn(&self) -> u8 { self.current_player as u8 }
     /// #     fn is_terminal(&self) -> bool { self.game_over }
@@ -230,20 +230,20 @@ pub trait GameState<A>: Sized {
     /// #         }
     /// #     }
     /// # }
-    /// 
-    /// let initial_state = MyGameState { 
+    ///
+    /// let initial_state = MyGameState {
     ///     current_player: PlayerId::ALICE,
     ///     move_count: 0,
-    ///     game_over: false 
+    ///     game_over: false
     /// };
     /// let action = MyAction { move_type: "play_tile".to_string() };
-    /// 
+    ///
     /// let new_state = initial_state.apply(&action);
-    /// 
+    ///
     /// // State should be updated
     /// assert_eq!(new_state.whose_turn(), PlayerId::BOB as u8);
     /// assert_ne!(new_state.fingerprint(), initial_state.fingerprint());
-    /// 
+    ///
     /// // Original state unchanged
     /// assert_eq!(initial_state.whose_turn(), PlayerId::ALICE as u8);
     /// ```

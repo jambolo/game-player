@@ -8,17 +8,17 @@ The hidden-game-player crate implements the basic components of a generic player
 
 ## Components
 
-### Core Traits and Types
+### Common Core Traits and Types
 
-- **`GameState` trait**: Abstract representation of game states with fingerprinting
+- **`State` trait**: Abstract representation of game states with fingerprinting
+- **`PlayerId`**: Two players, Alice and Bob, 0 and 1
 - **`StaticEvaluator` trait**: Interface for static position evaluation functions
 - **`TranspositionTable`**: Cache for game state values
-- **`ResponseGenerator`**: Signature for the method that generates all possible responses to a state
-- **`Action` trait**: Abstract representation of a move by a player.
 
-### Game Tree Search
+### Minimax Search
 
-- **`GameTree`**: Complete implementation of min-max search with alpha-beta pruning
+- Complete implementation of min-max search with alpha-beta pruning
+- **`ResponseGenerator` trait**: Trait that generates all possible responses to a state
 - Support for configurable search depth
 - Transposition table integration with relevance and value quality enhancements.
 - Supports two-player game only
@@ -26,6 +26,7 @@ The hidden-game-player crate implements the basic components of a generic player
 ### Monte Carlo Tree Search
 
 - **`MonteCarloTreeSearch`**: Monte Carlo Tree Search implementation with UCT-based node selection.
+- **`ResponseGenerator` trait**: Trait that generates all possible actions from a state
 - Configurable iteration count
 - Four-phase algorithm (Selection, Expansion, Rollout, Back-propagation)
 - Configurable exploration constant
@@ -47,12 +48,12 @@ impl Player for MyPlayer {
     fn setup(&mut self, game_state: &mut DominoesGameState) {
         // Initialize player's hand from the boneyard
     }
-    
+
     fn my_turn(&mut self, game_state: &DominoesGameState) -> (Action, DominoesGameState) {
         // Implement your turn logic here
         todo!("Implement turn logic")
     }
-    
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -100,17 +101,17 @@ impl GameState for MyGameState {
         // Return unique fingerprint for this state
         todo!()
     }
-    
+
     fn whose_turn(&self) -> Self::PlayerId {
         // Return which player moves next
         todo!()
     }
-    
+
     fn response(&self) -> Option<Rc<dyn GameState>> {
         // Return the chosen response, if any
         todo!()
     }
-    
+
     fn set_response(&mut self, response: Option<Rc<dyn GameState>>) {
         // Set the chosen response
         todo!()
@@ -119,35 +120,5 @@ impl GameState for MyGameState {
 ```
 
 ## Features
-
-### Analysis Features
-
-Enable detailed performance analysis:
-
-```toml
-[dependencies]
-hidden-game-player = { path = "...", features = ["analysis_game_tree", "analysis_transposition_table"] }
-```
-
-### Debug Features
-
-Enable debugging output:
-
-```toml
-[dependencies]
-hidden-game-player = { path = "...", features = ["debug_game_tree_node_info"] }
-```
-
-## Dependencies
-
-- **`serde_json`**: JSON serialization for analysis data (optional)
-- **`static_assertions`**: Compile-time assertions for data structure sizes
-
-## Performance Considerations
-
-- Transposition table size should be tuned based on available memory
-- Search depth significantly affects performance and strength
-- Static evaluator quality is crucial for good play
-- Analysis features add overhead and should be disabled in production
 
 ## Future Development

@@ -19,10 +19,10 @@
 /// ```rust
 /// # use hidden_game_player::transposition_table::TranspositionTable;
 /// let mut table = TranspositionTable::new(1000, 100);
-/// 
+///
 /// // Store a value
 /// table.update(12345, 0.75, 5);
-/// 
+///
 /// // Retrieve the value
 /// if let Some((value, quality)) = table.check(12345, 0) {
 ///     assert_eq!(value, 0.75);
@@ -43,6 +43,7 @@ pub struct TranspositionTable {
 // referenced again, so it should eventually be allowed to be replaced by a newer entry, regardless of the quality of the new
 // entry.
 #[derive(Clone)]
+#[repr(C, packed)] // 16 bytes
 struct Entry {
     fingerprint: u64, // The state's fingerprint
     value: f32,       // The state's value
@@ -52,7 +53,7 @@ struct Entry {
 
 impl Entry {
     const UNUSED: u64 = u64::MAX;
-    
+
     fn clear(&mut self) {
         self.fingerprint = Self::UNUSED;
     }
@@ -75,23 +76,23 @@ static_assertions::assert_eq_size!(Entry, [u8; 16]); // Entry should be 16 bytes
 
 impl TranspositionTable {
     /// Creates a new TranspositionTable
-    /// 
+    ///
     /// # Arguments
     /// * `size` - Number of entries in the table
     /// * `max_age` - Maximum age of entries allowed in the table
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```rust
     /// # use hidden_game_player::transposition_table::TranspositionTable;
     /// let table = TranspositionTable::new(1000, 50);
     /// // Table is ready to use with 1000 entries and max age of 50
     /// ```
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// Panics if `size` is 0 or `max_age` is 0 or negative.
-    /// 
+    ///
     /// ```should_panic
     /// # use hidden_game_player::transposition_table::TranspositionTable;
     /// let table = TranspositionTable::new(0, 50); // This will panic
@@ -118,24 +119,26 @@ impl TranspositionTable {
     /// # Panics
     /// Panics if `fingerprint` is `u64::MAX`.
     ///
-    /// # Examples
+    /// # Side Effects
+    /// * Resets the age of the entry to 0 if found.
     ///
+    /// # Examples
     /// ```rust
     /// # use hidden_game_player::transposition_table::TranspositionTable;
     /// let mut table = TranspositionTable::new(100, 10);
-    /// 
+    ///
     /// // Store a value with quality 5
     /// table.update(12345, 1.5, 5);
-    /// 
+    ///
     /// // Check with no minimum quality
     /// assert_eq!(table.check(12345, -1), Some((1.5, 5)));
-    /// 
+    ///
     /// // Check with minimum quality of 3 (should succeed)
     /// assert_eq!(table.check(12345, 3), Some((1.5, 5)));
-    /// 
+    ///
     /// // Check with minimum quality of 10 (should fail)
     /// assert_eq!(table.check(12345, 10), None);
-    /// 
+    ///
     /// // Check non-existent entry
     /// assert_eq!(table.check(99999, -1), None);
     /// ```
@@ -147,7 +150,7 @@ impl TranspositionTable {
         if entry.fingerprint != fingerprint {
             return None; // Not found
         }
-        
+
         // The entry was accessed so reset its age
         entry.age = 0;
 
@@ -174,15 +177,15 @@ impl TranspositionTable {
     /// ```rust
     /// # use hidden_game_player::transposition_table::TranspositionTable;
     /// let mut table = TranspositionTable::new(100, 10);
-    /// 
+    ///
     /// // Add a new entry
     /// table.update(12345, 1.0, 5);
     /// assert_eq!(table.check(12345, -1), Some((1.0, 5)));
-    /// 
+    ///
     /// // Try to update with lower quality (should not replace)
     /// table.update(12345, 2.0, 3);
     /// assert_eq!(table.check(12345, -1), Some((1.0, 5))); // Original value
-    /// 
+    ///
     /// // Update with higher quality (should replace)
     /// table.update(12345, 2.0, 7);
     /// assert_eq!(table.check(12345, -1), Some((2.0, 7))); // New value
@@ -225,11 +228,11 @@ impl TranspositionTable {
     /// ```rust
     /// # use hidden_game_player::transposition_table::TranspositionTable;
     /// let mut table = TranspositionTable::new(100, 10);
-    /// 
+    ///
     /// // Set an entry
     /// table.set(12345, 1.5, 5);
     /// assert_eq!(table.check(12345, -1), Some((1.5, 5)));
-    /// 
+    ///
     /// // Set again with lower quality (should still replace)
     /// table.set(12345, 2.5, 3);
     /// assert_eq!(table.check(12345, -1), Some((2.5, 3)));
@@ -252,23 +255,23 @@ impl TranspositionTable {
 
     /// The T-table is persistent. So in order to gradually dispose of entries that are no longer relevant, entries that have not
     /// been referenced for a while are removed.
-    /// 
+    ///
     /// This method increments the age of all entries and removes entries that exceed the maximum age.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```rust
     /// # use hidden_game_player::transposition_table::TranspositionTable;
     /// let mut table = TranspositionTable::new(100, 2); // max_age = 2
-    /// 
+    ///
     /// // Add an entry
     /// table.set(12345, 1.0, 5);
     /// assert_eq!(table.check(12345, -1), Some((1.0, 5)));
-    /// 
+    ///
     /// // Age the table once - entry should still be there
     /// table.age();
     /// assert_eq!(table.check(12345, -1), Some((1.0, 5))); // Age reset by check
-    /// 
+    ///
     /// // Age twice more without accessing - entry should be removed
     /// table.age();
     /// table.age();
@@ -334,10 +337,10 @@ mod tests {
     #[test]
     fn test_update_and_check_basic() {
         let mut table = TranspositionTable::new(100, 10);
-        
+
         // Add an entry
         table.update(12345, 1.5, 5);
-        
+
         // Check it's there
         assert_eq!(table.check(12345, -1), Some((1.5, 5)));
         assert_eq!(table.check(12345, 0), Some((1.5, 5)));
@@ -347,34 +350,34 @@ mod tests {
     #[test]
     fn test_check_minimum_quality() {
         let mut table = TranspositionTable::new(100, 10);
-        
+
         table.update(12345, 2.0, 5);
-        
+
         // Check with various minimum qualities
         assert_eq!(table.check(12345, -1), Some((2.0, 5))); // No minimum
-        assert_eq!(table.check(12345, 0), Some((2.0, 5)));  // Below stored quality
-        assert_eq!(table.check(12345, 3), Some((2.0, 5)));  // Below stored quality
-        assert_eq!(table.check(12345, 5), Some((2.0, 5)));  // Equal to stored quality
-        assert_eq!(table.check(12345, 6), None);            // Above stored quality
-        assert_eq!(table.check(12345, 10), None);           // Well above stored quality
+        assert_eq!(table.check(12345, 0), Some((2.0, 5))); // Below stored quality
+        assert_eq!(table.check(12345, 3), Some((2.0, 5))); // Below stored quality
+        assert_eq!(table.check(12345, 5), Some((2.0, 5))); // Equal to stored quality
+        assert_eq!(table.check(12345, 6), None); // Above stored quality
+        assert_eq!(table.check(12345, 10), None); // Well above stored quality
     }
 
     #[test]
     fn test_update_quality_replacement_rules() {
         let mut table = TranspositionTable::new(100, 10);
-        
+
         // Add initial entry
         table.update(12345, 1.0, 5);
         assert_eq!(table.check(12345, -1), Some((1.0, 5)));
-        
+
         // Try to update with lower quality (should not replace)
         table.update(12345, 2.0, 3);
         assert_eq!(table.check(12345, -1), Some((1.0, 5))); // Original value
-        
+
         // Update with equal quality (should replace)
         table.update(12345, 3.0, 5);
         assert_eq!(table.check(12345, -1), Some((3.0, 5))); // New value
-        
+
         // Update with higher quality (should replace)
         table.update(12345, 4.0, 7);
         assert_eq!(table.check(12345, -1), Some((4.0, 7))); // New value
@@ -383,15 +386,15 @@ mod tests {
     #[test]
     fn test_set_always_replaces() {
         let mut table = TranspositionTable::new(100, 10);
-        
+
         // Add initial entry
         table.set(12345, 1.0, 5);
         assert_eq!(table.check(12345, -1), Some((1.0, 5)));
-        
+
         // Set with lower quality (should still replace)
         table.set(12345, 2.0, 3);
         assert_eq!(table.check(12345, -1), Some((2.0, 3)));
-        
+
         // Set with higher quality (should replace)
         table.set(12345, 3.0, 7);
         assert_eq!(table.check(12345, -1), Some((3.0, 7)));
@@ -400,13 +403,13 @@ mod tests {
     #[test]
     fn test_age_resets_on_check() {
         let mut table = TranspositionTable::new(100, 2);
-        
+
         // Add an entry
         table.set(12345, 1.0, 5);
-        
+
         // Age once
         table.age();
-        
+
         // Check (should reset age)
         assert_eq!(table.check(12345, -1), Some((1.0, 5)));
     }
@@ -414,16 +417,16 @@ mod tests {
     #[test]
     fn test_age_removes_old_entries() {
         let mut table = TranspositionTable::new(100, 2);
-        
+
         // Add an entry
         table.set(12345, 1.0, 5);
         assert_eq!(table.check(12345, -1), Some((1.0, 5)));
-        
+
         // Age beyond max_age without accessing
         table.age(); // age = 1
         table.age(); // age = 2
         table.age(); // age = 3, should be removed (> max_age = 2)
-        
+
         // Entry should be gone
         assert_eq!(table.check(12345, -1), None);
     }
@@ -431,17 +434,17 @@ mod tests {
     #[test]
     fn test_multiple_entries() {
         let mut table = TranspositionTable::new(100, 10);
-        
+
         // Add multiple entries
         table.update(1, 1.0, 1);
         table.update(2, 2.0, 2);
         table.update(3, 3.0, 3);
-        
+
         // Check all entries exist
         assert_eq!(table.check(1, -1), Some((1.0, 1)));
         assert_eq!(table.check(2, -1), Some((2.0, 2)));
         assert_eq!(table.check(3, -1), Some((3.0, 3)));
-        
+
         // Check non-existent entry
         assert_eq!(table.check(4, -1), None);
     }
@@ -450,11 +453,11 @@ mod tests {
     fn test_hash_collision_handling() {
         // Create a small table to force collisions
         let mut table = TranspositionTable::new(1, 10); // Only 1 slot
-        
+
         // Add first entry
         table.update(1, 1.0, 5);
         assert_eq!(table.check(1, -1), Some((1.0, 5)));
-        
+
         // Add second entry that will hash to same slot
         // Since we have quality-based replacement, this should replace
         table.update(2, 2.0, 5);
@@ -465,13 +468,21 @@ mod tests {
     #[test]
     fn test_floating_point_values() {
         let mut table = TranspositionTable::new(100, 10);
-        
+
         // Test various floating point values
         let test_values = [
-            0.0, -0.0, 1.0, -1.0, 3.14159, -2.71828,
-            f32::MIN, f32::MAX, f32::EPSILON, -f32::EPSILON
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            3.14159,
+            -2.71828,
+            f32::MIN,
+            f32::MAX,
+            f32::EPSILON,
+            -f32::EPSILON,
         ];
-        
+
         for (i, &value) in test_values.iter().enumerate() {
             let fingerprint = (i + 1) as u64;
             table.update(fingerprint, value, 1);
@@ -482,13 +493,13 @@ mod tests {
     #[test]
     fn test_edge_case_qualities() {
         let mut table = TranspositionTable::new(100, 10);
-        
+
         // Test with quality 0
         table.update(1, 1.0, 0);
         assert_eq!(table.check(1, -1), Some((1.0, 0)));
         assert_eq!(table.check(1, 0), Some((1.0, 0)));
         assert_eq!(table.check(1, 1), None);
-        
+
         // Test with high quality
         table.update(2, 2.0, i16::MAX);
         assert_eq!(table.check(2, -1), Some((2.0, i16::MAX)));
@@ -533,12 +544,12 @@ mod tests {
     #[test]
     fn test_large_table() {
         let mut table = TranspositionTable::new(10000, 100);
-        
+
         // Add many entries
         for i in 1..=1000 {
             table.update(i, i as f32 * 0.1, (i % 20) as i16);
         }
-        
+
         // Check some entries exist
         assert_eq!(table.check(1, -1), Some((0.1, 1)));
         assert_eq!(table.check(500, -1), Some((50.0, 0)));
@@ -548,23 +559,23 @@ mod tests {
     #[test]
     fn test_aging_multiple_entries() {
         let mut table = TranspositionTable::new(100, 3);
-        
+
         // Add multiple entries
         table.set(1, 1.0, 1);
         table.set(2, 2.0, 2);
         table.set(3, 3.0, 3);
-        
+
         // Age twice
         table.age();
         table.age();
-        
+
         // Access one entry to reset its age
         assert_eq!(table.check(2, -1), Some((2.0, 2)));
-        
+
         // Age beyond max_age
         table.age();
         table.age();
-        
+
         // Only the accessed entry should remain
         assert_eq!(table.check(1, -1), None);
         assert_eq!(table.check(2, -1), Some((2.0, 2)));
