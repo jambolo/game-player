@@ -9,7 +9,7 @@
 //!
 //! ## Key Integration Points
 //!
-//! 1. **Implement [`State`] trait**: Provides game state management and move application
+//! 1. **Implement [`State`] trait**: Provides game state management and move application with associated Action type
 //! 2. **Implement [`StaticEvaluator`] trait**: Evaluates how good a position is for each player
 //! 3. **Implement [`ResponseGenerator`] trait**: Generates all possible moves from a position
 //! 4. **Use [`search`](minimax::search)**: Combines everything to find the optimal move
@@ -52,7 +52,9 @@
 //! }
 //!
 //! // 1. Implement the State trait for your game
-//! impl State<GameMove> for GameState {
+//! impl State for GameState {
+//!     type Action = GameMove;
+//!
 //!     fn fingerprint(&self) -> u64 {
 //!         // Create unique hash for transposition table
 //!         self.board ^ (self.current_player as u64) << 63 ^ self.move_count as u64
@@ -66,7 +68,7 @@
 //!         self.is_game_over()
 //!     }
 //!
-//!     fn apply(&self, game_move: &GameMove) -> Self {
+//!     fn apply(&self, game_move: &Self::Action) -> Self {
 //!         // Apply move and return new state
 //!         Self {
 //!             board: self.board.wrapping_add(1), // Simplified board update
@@ -95,8 +97,10 @@
 //! // 3. Implement move generation for your game
 //! struct GameMoveGenerator;
 //!
-//! impl ResponseGenerator<GameState> for GameMoveGenerator {
-//!     fn generate(&self, state: &Rc<GameState>, _depth: i32) -> Vec<Box<GameState>> {
+//! impl ResponseGenerator for GameMoveGenerator {
+//!     type State = GameState;
+//!
+//!     fn generate(&self, state: &Rc<Self::State>, _depth: i32) -> Vec<Box<Self::State>> {
 //!         state.get_possible_moves()
 //!             .into_iter()
 //!             .map(|game_move| Box::new(state.apply(&game_move)))

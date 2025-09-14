@@ -46,20 +46,20 @@ struct Response<S> {
 }
 
 // Holds static information pertaining to the search.
-struct Context<'a, S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S>> {
+struct Context<'a, S, E: StaticEvaluator<S>, R: ResponseGenerator<State = S>>
+where
+    S: State,
+{
     max_depth: i32,
     rg: &'a R,
     sef: &'a E,
     tt: &'a Rc<RefCell<TranspositionTable>>,
-    _phantom: std::marker::PhantomData<(S, A)>,
+    _phantom: std::marker::PhantomData<S>,
 }
 /// Response generator function object trait.
 ///
 /// This trait defines the interface for generating all possible responses from a given state. Implementers should provide
 /// game-specific logic for move generation.
-///
-/// # Type Parameters
-/// * `S` - Game state type that implements the `State` trait
 ///
 /// # Examples
 /// ```rust,ignore
@@ -68,11 +68,10 @@ struct Context<'a, S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S
 ///
 /// struct MyResponseGenerator;
 ///
-/// impl<S> ResponseGenerator<S> for MyResponseGenerator
-/// where
-///     S: crate::state::State<MyAction>
-/// {
-///     fn generate(&self, state: &Rc<S>, depth: i32) -> Vec<Box<S>> {
+/// impl ResponseGenerator for MyResponseGenerator {
+///     type State = MyGameState;
+///
+///     fn generate(&self, state: &Rc<Self::State>, depth: i32) -> Vec<Box<Self::State>> {
 ///         // Generate all valid moves for the current player
 ///         let mut responses = Vec::new();
 ///
@@ -91,7 +90,10 @@ struct Context<'a, S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S
 /// - Return an empty vector if no moves are available (player cannot respond)
 /// - If passing is allowed in the game, include a "pass" move as a valid response
 /// - The depth parameter can be used for depth-dependent move generation optimizations
-pub trait ResponseGenerator<S> {
+pub trait ResponseGenerator {
+    /// The type representing game states that this generator works with
+    type State: State;
+
     /// Generates a list of all possible responses to the given state.
     ///
     /// This method should return all legal moves available to the current player in the given state. The implementation
@@ -120,7 +122,7 @@ pub trait ResponseGenerator<S> {
     /// # Note
     /// Returning no responses indicates that the player cannot respond. It does not necessarily indicate that the game is
     /// over or that the player has passed. If passing is allowed, then a "pass" state should be a valid response.
-    fn generate(&self, state: &Rc<S>, depth: i32) -> Vec<Box<S>>;
+    fn generate(&self, state: &Rc<Self::State>, depth: i32) -> Vec<Box<Self::State>>;
 }
 
 /// A minimax search implementation using alpha-beta pruning and a transposition table.
@@ -172,13 +174,18 @@ pub trait ResponseGenerator<S> {
 /// - **Alpha-beta pruning**: Early termination of unpromising branches
 /// - **Transposition table**: Caching of previously evaluated positions
 /// - **Move ordering**: Better moves searched first for more effective pruning
-pub fn search<S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S>>(
+pub fn search<S, E, R>(
     tt: &Rc<RefCell<TranspositionTable>>,
     sef: &E,
     rg: &R,
     s0: &Rc<S>,
     max_depth: i32,
-) -> Option<Rc<S>> {
+) -> Option<Rc<S>>
+where
+    S: State,
+    E: StaticEvaluator<S>,
+    R: ResponseGenerator<State = S>,
+{
     let context = Context {
         tt,
         sef,
@@ -199,13 +206,18 @@ pub fn search<S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S>>(
 }
 
 // Evaluates all of Alice's possible responses to the given state. The returned response is the one with the highest value.
-fn alice_search<S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S>>(
-    context: &Context<S, E, A, R>,
+fn alice_search<S, E, R>(
+    context: &Context<S, E, R>,
     state: &Rc<S>,
     mut alpha: f32,
     beta: f32,
     depth: i32,
-) -> Option<Response<S>> {
+) -> Option<Response<S>>
+where
+    S: State,
+    E: StaticEvaluator<S>,
+    R: ResponseGenerator<State = S>,
+{
     // Depth of responses to this state
     let response_depth = depth + 1;
     // Quality of a response as a result of a search at this depth.
@@ -315,13 +327,18 @@ fn alice_search<S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S>>(
 }
 
 // Evaluates all of Bob's possible responses to the given state. The returned response is the one with the lowest value.
-fn bob_search<S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S>>(
-    context: &Context<S, E, A, R>,
+fn bob_search<S, E, R>(
+    context: &Context<S, E, R>,
     state: &Rc<S>,
     alpha: f32,
     mut beta: f32,
     depth: i32,
-) -> Option<Response<S>> {
+) -> Option<Response<S>>
+where
+    S: State,
+    E: StaticEvaluator<S>,
+    R: ResponseGenerator<State = S>,
+{
     // Depth of responses to this state
     let response_depth = depth + 1;
     // Quality of a response as a result of a search at this depth.
@@ -430,11 +447,16 @@ fn bob_search<S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S>>(
 }
 
 // Generates a list of responses to the given node
-fn generate_responses<S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S>>(
-    context: &Context<S, E, A, R>,
+fn generate_responses<S, E, R>(
+    context: &Context<S, E, R>,
     state: &Rc<S>,
     depth: i32,
-) -> Vec<Response<S>> {
+) -> Vec<Response<S>>
+where
+    S: State,
+    E: StaticEvaluator<S>,
+    R: ResponseGenerator<State = S>,
+{
     // Handle the case where node.state might be None
     let responses = context.rg.generate(state, depth);
     responses
@@ -452,10 +474,15 @@ fn generate_responses<S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerato
 }
 
 // Get a preliminary value of the state from the static evaluator or the transposition table
-fn get_preliminary_value<S: State<A>, E: StaticEvaluator<S>, A, R: ResponseGenerator<S>>(
-    context: &Context<S, E, A, R>,
+fn get_preliminary_value<S, E, R>(
+    context: &Context<S, E, R>,
     state: &Rc<S>,
-) -> (f32, i16) {
+) -> (f32, i16)
+where
+    S: State,
+    E: StaticEvaluator<S>,
+    R: ResponseGenerator<State = S>,
+{
     // SEF optimization:
     // Since any value of any state in the T-table has already been computed by search and/or SEF, it has a quality that is at
     // least as good as the quality of the value returned by the SEF. So, if the state being evaluated is in the T-table, then

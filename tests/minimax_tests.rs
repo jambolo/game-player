@@ -48,7 +48,9 @@ impl MockGameState {
     }
 }
 
-impl State<MockAction> for MockGameState {
+impl State for MockGameState {
+    type Action = MockAction;
+
     fn whose_turn(&self) -> u8 {
         self.player
     }
@@ -120,7 +122,8 @@ impl MockResponseGenerator {
     }
 }
 
-impl ResponseGenerator<MockGameState> for MockResponseGenerator {
+impl ResponseGenerator for MockResponseGenerator {
+    type State = MockGameState;
     fn generate(&self, state: &Rc<MockGameState>, _depth: i32) -> Vec<Box<MockGameState>> {
         state
             .children

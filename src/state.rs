@@ -78,7 +78,8 @@ impl PlayerId {
 ///     // other game-specific fields...
 /// }
 ///
-/// impl State<MyAction> for MyGameState {
+/// impl State for MyGameState {
+///    type Action = MyAction;
 ///     fn fingerprint(&self) -> u64 {
 ///         // Generate unique hash for this position
 ///         // Implementation depends on game specifics
@@ -102,7 +103,10 @@ impl PlayerId {
 ///     }
 /// }
 /// ```
-pub trait State<A>: Sized {
+pub trait State: Sized {
+    /// The type representing actions/moves in this game
+    type Action: Clone;
+
     /// Returns a unique fingerprint (hash) for this state.
     ///
     /// The fingerprint must be statistically unique across all possible game states to avoid hash collisions in transposition
@@ -125,11 +129,12 @@ pub trait State<A>: Sized {
     /// # struct MyAction;
     /// # #[derive(Clone, Copy)]
     /// # struct MyGameState { current_player: PlayerId }
-    /// # impl State<MyAction> for MyGameState {
+    /// # impl State for MyGameState {
+    /// #     type Action = MyAction;
     /// #     fn fingerprint(&self) -> u64 { 42 }
     /// #     fn whose_turn(&self) -> u8 { self.current_player as u8 }
     /// #     fn is_terminal(&self) -> bool { false }
-    /// #     fn apply(&self, _action: &MyAction) -> Self { *self }
+    /// #     fn apply(&self, _action: &Self::Action) -> Self { *self }
     /// # }
     /// # fn create_initial_state() -> MyGameState { MyGameState { current_player: PlayerId::ALICE } }
     /// let state = create_initial_state();
@@ -153,14 +158,14 @@ pub trait State<A>: Sized {
     /// # struct MyAction;
     /// # #[derive(Clone, Copy)]
     /// # struct MyGameState { current_player: PlayerId }
-    /// # impl State<MyAction> for MyGameState {
+    /// # impl State for MyGameState {
+    /// #     type Action = MyAction;
     /// #     fn fingerprint(&self) -> u64 { 42 }
     /// #     fn whose_turn(&self) -> u8 { self.current_player as u8 }
     /// #     fn is_terminal(&self) -> bool { false }
-    /// #     fn apply(&self, _action: &MyAction) -> Self { *self }
+    /// #     fn apply(&self, _action: &Self::Action) -> Self { *self }
     /// # }
-    /// # fn create_initial_state() -> MyGameState { MyGameState { current_player: PlayerId::ALICE } }
-    /// let state = create_initial_state();
+    /// let state = MyGameState { current_player: PlayerId::ALICE };
     /// match state.whose_turn() {
     ///     0 => println!("Alice to move"), // PlayerId::ALICE as u8
     ///     1 => println!("Bob to move"),   // PlayerId::BOB as u8
@@ -181,11 +186,12 @@ pub trait State<A>: Sized {
     /// # struct MyAction;
     /// # #[derive(Clone, Copy)]
     /// # struct MyGameState { game_is_over: bool }
-    /// # impl State<MyAction> for MyGameState {
+    /// # impl State for MyGameState {
+    /// #     type Action = MyAction;
     /// #     fn fingerprint(&self) -> u64 { 42 }
     /// #     fn whose_turn(&self) -> u8 { 0 }
     /// #     fn is_terminal(&self) -> bool { self.game_is_over }
-    /// #     fn apply(&self, _action: &MyAction) -> Self { *self }
+    /// #     fn apply(&self, _action: &Self::Action) -> Self { *self }
     /// # }
     /// let state = MyGameState { game_is_over: true };
     /// assert!(state.is_terminal());
@@ -216,13 +222,14 @@ pub trait State<A>: Sized {
     /// #     game_over: bool
     /// # }
     /// #
-    /// # impl State<MyAction> for MyGameState {
+    /// # impl State for MyGameState {
+    /// #     type Action = MyAction;
     /// #     fn fingerprint(&self) -> u64 {
     /// #         (self.current_player as u64) << 32 | self.move_count as u64
     /// #     }
     /// #     fn whose_turn(&self) -> u8 { self.current_player as u8 }
     /// #     fn is_terminal(&self) -> bool { self.game_over }
-    /// #     fn apply(&self, action: &MyAction) -> Self {
+    /// #     fn apply(&self, action: &Self::Action) -> Self {
     /// #         MyGameState {
     /// #             current_player: self.current_player.other(),
     /// #             move_count: self.move_count + 1,
@@ -247,7 +254,7 @@ pub trait State<A>: Sized {
     /// // Original state unchanged
     /// assert_eq!(initial_state.whose_turn(), PlayerId::ALICE as u8);
     /// ```
-    fn apply(&self, action: &A) -> Self;
+    fn apply(&self, action: &Self::Action) -> Self;
 }
 
 #[cfg(test)]
