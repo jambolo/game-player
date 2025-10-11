@@ -1,4 +1,4 @@
-//! Static Evaluation Function
+//! Static Evaluation Function Module
 //!
 //! This module defines the `StaticEvaluator` trait, which provides an interface for static evaluation functions.
 

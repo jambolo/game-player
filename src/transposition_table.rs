@@ -1,4 +1,6 @@
-//! Transposition Table
+//! Transposition Table Module
+//!
+//! This module implements a transposition table, which is a map of game state values referenced by the states' fingerprints.
 
 /// A map of game state values referenced by the states' fingerprints.
 ///
