@@ -1,30 +1,43 @@
-//! Monte Carlo Tree Search (MCTS) module for the hidden information game player
+//! Monte Carlo Tree Search (MCTS) module
+//!
+//! This module implements the Monte Carlo Tree Search (MCTS) algorithm for making decisions in two-player perfect and hidden
+//! information games. It provides the core MCTS logic, including selection, expansion, simulation (rollout), and back-propagation
+//! phases. The MCTS algorithm builds a search tree incrementally and uses random simulations to evaluate the potential of
+//! different moves. The module is designed to be generic and works with any game state that implements the `State` trait, along
+//! with the `ResponseGenerator` and `Rollout` traits.
 
 use crate::state::State;
 use indextree::{Arena, NodeId};
 
-const _DEFAULT_EXPLORATION_CONSTANT: f32 = 1.4142135623730951; // sqrt(2)
+/// Default exploration constant for the UCT formula
+pub const DEFAULT_EXPLORATION_CONSTANT: f32 = 1.4142135623730951; // sqrt(2)
 
 /// Response generator trait for MCTS search
 pub trait ResponseGenerator {
     /// The type representing game states that this generator works with
     type State: State;
 
-    /// Generates a list of all possible actions from the given state.
+    /// Generates a list of all possible legal actions from the given state.
     ///
     /// # Arguments
     /// * `state` - state to respond to
     ///
     /// # Returns
-    /// list of all possible actions
+    /// List of all possible legal actions for the given state.
     ///
-    /// # Note
-    /// Returning no actions indicates that the player cannot respond. It does not necessarily indicate that the game is
-    /// over or that the player has passed. If passing is allowed, then a pass should be a valid response.
+    /// # Notes
+    /// - All returned actions must be legal in the provided state.
+    /// - The order of actions is not significant unless required by the implementation.
+    /// - Returning no actions indicates that the player cannot respond. It does not necessarily indicate that the game is
+    ///   over or that the player has passed. If passing is allowed, then a pass must be a valid action.
     fn generate(&self, state: &Self::State) -> Vec<<Self::State as State>::Action>;
 }
 
 /// Rollout trait for MCTS search
+///
+/// The Rollout trait defines the interface for performing rollouts in a game state. It is used by the MCTS algorithm to simulate
+/// game play and evaluate the potential outcomes of different moves. It is implemented for specific game states in the
+/// game-specific code.
 ///
 /// # Type Parameters
 /// * `S` - Game state type
@@ -55,24 +68,21 @@ pub trait ResponseGenerator {
 /// let score = rollout.play(&state);
 /// assert_eq!(score, 42.0);
 /// ```
-///
-///
-/// Rollout trait for MCTS search
 pub trait Rollout {
-    /// The type representing game states that this rollout works with
+    /// The type representing the game state
     type State: State;
 
     /// Performs a rollout (simulation) from the given state and returns the evaluated value.
+    ///
+    /// The rollout is a simulation of the game from the given state to a terminal state, following simple heuristics or random
+    /// moves. The result is a score in the range [-1.0, 1.0], where 1.0 indicates a win for the computer player, -1.0 indicates a
+    /// loss, and 0.0 indicates a draw.
     ///
     /// # Arguments
     /// * `state` - The game state to perform the rollout from
     ///
     /// # Returns
-    /// The evaluation score for the state after performing the rollout in the range [0.0, 1.0]. 1.0 indicates a win for the
-    /// computer player, 0.0 indicates a loss, and 0.5 indicates a draw.
-    ///
-    /// # Note
-    /// This method must be implemented by the game-specific code.
+    /// [-1.0, 1.0] score representing the outcome of the rollout from the perspective of the computer player.
     fn play(&self, state: &Self::State) -> f32;
 }
 
@@ -80,7 +90,6 @@ pub trait Rollout {
 ///
 /// # Type Parameters
 /// * `S` - Game state type
-/// * `A` - Action type
 ///
 /// # Examples
 ///
@@ -194,13 +203,13 @@ where
             }
         }
 
-        assert!(false, "UCT cannot be computed because the parent node does not exist or has no visits");
+        panic!("UCT cannot be computed because the parent node does not exist or has no visits");
         f32::INFINITY
     }
 }
 
 // Holds static information for the MCTS search
-struct Context<'a, G, R> 
+struct Context<'a, G, R>
 where
     G: ResponseGenerator,
     R: Rollout<State = G::State>,
@@ -262,10 +271,10 @@ pub fn search<S: State + Clone>(
             node_id = child_id;
         }
 
-        // Rollout - evaluate the node using the static evaluator
-        let value = rollout(node_id, &arena, &context);
+        // Rollout - evaluate the node using the Rollout implementation, and normalize the result to [0, 1]
+        let value = (rollout(node_id, &arena, &context) + 1.0) / 2.0;
 
-        // Back-propagation
+        // Back-propagation - update the node and its ancestors with the rollout result
         back_propagate(node_id, &mut arena, value);
     }
 
@@ -286,14 +295,15 @@ pub fn search<S: State + Clone>(
     best_child_id.and_then(|child_id| arena[child_id].get().action.clone())
 }
 
-// Helper function that determines if the node's children should be selected instead.
-fn not_selectable<S>(node_id: NodeId, arena: &Arena<Node<S>>) -> bool
+// Helper function that determines if the node should be selected for expansion.
+// A node is selectable if it is not fully expanded, has no children, or represents a terminal game state.
+fn selectable<S>(node_id: NodeId, arena: &Arena<Node<S>>) -> bool
 where
     S: State,
 {
     let has_children = node_id.children(arena).count() > 0;
     let node = arena[node_id].get();
-    node.fully_expanded() && has_children && !node.state.is_terminal()
+    !node.fully_expanded() || !has_children || node.state.is_terminal()
 }
 
 // Selects the best node for expansion using the UCT value
@@ -317,7 +327,11 @@ where
     let c = context.c;
     let mut selected = node_id;
 
-    while not_selectable(selected, arena) {
+    // Traverse the tree until a selectable node is found
+    // If a node is not fully expanded, then select it for expansion.
+    // If a node is terminal or has no children, then select it for evaluation.
+    // Otherwise, descend to the child with the highest UCT value and continue.
+    while !selectable(selected, arena) {
         let children: Vec<NodeId> = selected.children(arena).collect();
         let best_child = children.iter()
                 .max_by(|&a, &b| {
@@ -335,13 +349,15 @@ where
 
 // Expands a node by adding a child for one of its untried actions and returns the new child node
 //
+// If the node is fully expanded (no untried actions remain) or represents a terminal game state, this function returns None.
+//
 // # Arguments
 // * `node_id` - The node to expand
 // * `arena` - The arena containing all nodes
 // * `context` - The search context containing the response generator
 //
 // # Returns
-// Some(child_node_id) if expansion was successful, None if no untried actions remain
+// Some(child_node_id) if expansion was successful, None otherwise
 fn expand<G, R>(node_id: NodeId, arena: &mut Arena<Node<G::State>>, context: &Context<'_, G, R>) -> Option<NodeId>
 where
     G: ResponseGenerator,
@@ -375,7 +391,7 @@ where
 // * `context` - The search context containing the rollout implementation
 //
 // # Returns
-// The evaluation score for the node's game state
+// [-1.0, 1.0] as the evaluation score for the node's game state
 fn rollout<G, R>(node_id: NodeId, arena: &Arena<Node<G::State>>, context: &Context<'_, G, R>) -> f32
 where
     G: ResponseGenerator,

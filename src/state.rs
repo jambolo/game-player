@@ -1,4 +1,4 @@
-//! Game State Interface
+//! Game State Module
 //!
 //! This module implements the state components and traits, providing the necessary interface for the game-specific state and
 //! logic.

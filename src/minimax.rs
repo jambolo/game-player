@@ -1,4 +1,4 @@
-//! Minimax Game Tree Search Implementation
+//! Minimax Game Tree Search Implementation Module
 //!
 //! This module implements a game tree search using min-max strategy, alpha-beta pruning, and a transposition table. The
 //! game-specific components are provided by the user using the traits defined in other modules.
