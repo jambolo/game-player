@@ -1,5 +1,5 @@
-[package]
-name = "hidden-game-player"
+ [package]
+name = "game-player"
 version = "0.1.0"
 edition = "2024"
 description = "Basic components for implementing an AI player in a two-person hidden information game"

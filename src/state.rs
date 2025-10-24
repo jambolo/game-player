@@ -11,7 +11,7 @@
 /// # Examples
 ///
 /// ```rust
-/// # use hidden_game_player::PlayerId;
+/// # use game_player::PlayerId;
 /// let current_player = PlayerId::ALICE;
 /// let player_index = current_player as usize; // 0
 /// ```
@@ -27,7 +27,7 @@ impl PlayerId {
     /// # Examples
     ///
     /// ```rust
-    /// # use hidden_game_player::PlayerId;
+    /// # use game_player::PlayerId;
     /// assert_eq!(PlayerId::ALICE.other(), PlayerId::BOB);
     /// assert_eq!(PlayerId::BOB.other(), PlayerId::ALICE);
     /// ```
@@ -65,7 +65,7 @@ impl PlayerId {
 /// # Examples
 ///
 /// ```rust
-/// # use hidden_game_player::{State, PlayerId};
+/// # use game_player::{State, PlayerId};
 ///
 /// #[derive(Clone, Default)]
 /// struct MyAction;
@@ -124,7 +124,7 @@ pub trait State: Sized {
     /// # Examples
     ///
     /// ```rust
-    /// # use hidden_game_player::{State, PlayerId};
+    /// # use game_player::{State, PlayerId};
     /// # #[derive(Clone, Default)]
     /// # struct MyAction;
     /// # #[derive(Clone, Copy)]
@@ -153,7 +153,7 @@ pub trait State: Sized {
     ///
     /// # Examples
     /// ```rust
-    /// # use hidden_game_player::{State, PlayerId};
+    /// # use game_player::{State, PlayerId};
     /// # #[derive(Clone, Default)]
     /// # struct MyAction;
     /// # #[derive(Clone, Copy)]
@@ -181,7 +181,7 @@ pub trait State: Sized {
     ///
     /// # Examples
     /// ```rust
-    /// # use hidden_game_player::{State, PlayerId};
+    /// # use game_player::{State, PlayerId};
     /// # #[derive(Clone, Default)]
     /// # struct MyAction;
     /// # #[derive(Clone, Copy)]
@@ -211,7 +211,7 @@ pub trait State: Sized {
     ///
     /// # Examples
     /// ```rust
-    /// # use hidden_game_player::{State, PlayerId};
+    /// # use game_player::{State, PlayerId};
     /// #
     /// # #[derive(Debug, Clone, Default)]
     /// # struct MyAction { move_type: String }

@@ -7,10 +7,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use hidden_game_player::minimax::{ResponseGenerator, search};
-use hidden_game_player::state::{PlayerId, State};
-use hidden_game_player::static_evaluator::StaticEvaluator;
-use hidden_game_player::transposition_table::TranspositionTable;
+use game_player::minimax::{ResponseGenerator, search};
+use game_player::state::{PlayerId, State};
+use game_player::static_evaluator::StaticEvaluator;
+use game_player::transposition_table::TranspositionTable;
 
 /// Mock action type for testing
 #[derive(Debug, Clone, PartialEq)]

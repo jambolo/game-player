@@ -17,7 +17,7 @@
 /// # Examples
 ///
 /// ```rust
-/// # use hidden_game_player::transposition_table::TranspositionTable;
+/// # use game_player::transposition_table::TranspositionTable;
 /// let mut table = TranspositionTable::new(1000, 100);
 ///
 /// // Store a value
@@ -84,7 +84,7 @@ impl TranspositionTable {
     /// # Examples
     ///
     /// ```rust
-    /// # use hidden_game_player::transposition_table::TranspositionTable;
+    /// # use game_player::transposition_table::TranspositionTable;
     /// let table = TranspositionTable::new(1000, 50);
     /// // Table is ready to use with 1000 entries and max age of 50
     /// ```
@@ -94,7 +94,7 @@ impl TranspositionTable {
     /// Panics if `size` is 0 or `max_age` is 0 or negative.
     ///
     /// ```should_panic
-    /// # use hidden_game_player::transposition_table::TranspositionTable;
+    /// # use game_player::transposition_table::TranspositionTable;
     /// let table = TranspositionTable::new(0, 50); // This will panic
     /// ```
     pub fn new(size: usize, max_age: i16) -> Self {
@@ -124,7 +124,7 @@ impl TranspositionTable {
     ///
     /// # Examples
     /// ```rust
-    /// # use hidden_game_player::transposition_table::TranspositionTable;
+    /// # use game_player::transposition_table::TranspositionTable;
     /// let mut table = TranspositionTable::new(100, 10);
     ///
     /// // Store a value with quality 5
@@ -175,7 +175,7 @@ impl TranspositionTable {
     ///
     /// # Examples
     /// ```rust
-    /// # use hidden_game_player::transposition_table::TranspositionTable;
+    /// # use game_player::transposition_table::TranspositionTable;
     /// let mut table = TranspositionTable::new(100, 10);
     ///
     /// // Add a new entry
@@ -226,7 +226,7 @@ impl TranspositionTable {
     ///
     /// # Examples
     /// ```rust
-    /// # use hidden_game_player::transposition_table::TranspositionTable;
+    /// # use game_player::transposition_table::TranspositionTable;
     /// let mut table = TranspositionTable::new(100, 10);
     ///
     /// // Set an entry
@@ -261,7 +261,7 @@ impl TranspositionTable {
     /// # Examples
     ///
     /// ```rust
-    /// # use hidden_game_player::transposition_table::TranspositionTable;
+    /// # use game_player::transposition_table::TranspositionTable;
     /// let mut table = TranspositionTable::new(100, 2); // max_age = 2
     ///
     /// // Add an entry

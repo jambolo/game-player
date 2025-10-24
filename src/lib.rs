@@ -20,8 +20,8 @@
 //! ```rust
 //! use std::cell::RefCell;
 //! use std::rc::Rc;
-//! use hidden_game_player::{PlayerId, State, StaticEvaluator, TranspositionTable};
-//! use hidden_game_player::minimax::{ResponseGenerator, search};
+//! use game_player::{PlayerId, State, StaticEvaluator, TranspositionTable};
+//! use game_player::minimax::{ResponseGenerator, search};
 //!
 //! // Simple game structures (chess-like for demonstration)
 //! #[derive(Debug, Clone, PartialEq)]

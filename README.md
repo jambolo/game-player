@@ -1,10 +1,15 @@
-# hidden-game-player
+# game-player
 
-This crate provides the base components for implementing a player in a two-person hidden information games, including game tree search algorithms and supporting infrastructure.
+This crate provides the base components for implementing a player in a two-person game.
+
+This is a **WORK IN PROGRESS**
 
 ## Overview
 
-The hidden-game-player crate implements the basic components of a generic player for a two-person hidden information game. It provides a complete game tree search implementation using min-max strategy with alpha-beta pruning and transposition tables for optimal performance.
+The game-player crate implements the basic components of a generic player in a two-person game. It provides:
+
+1. A min-max game tree search algorithm using alpha-beta pruning and transposition tables for optimal performance.
+2. A basic Monte Carlo Tree Search algorithm.
 
 ## Components
 
@@ -28,9 +33,7 @@ The hidden-game-player crate implements the basic components of a generic player
 - **`MonteCarloTreeSearch`**: Monte Carlo Tree Search implementation with UCT-based node selection.
 - **`ResponseGenerator` trait**: Trait that generates all possible actions from a state
 - Configurable iteration count
-- Four-phase algorithm (Selection, Expansion, Rollout, Back-propagation)
 - Configurable exploration constant
-- Static evaluation integration
 - Supports two-player game only
 
 ## Usage
@@ -38,7 +41,7 @@ The hidden-game-player crate implements the basic components of a generic player
 ### Basic MCTS Player Implementation
 
 ```rust
-use hidden_game_player::{Player, GameState, Action};
+use game_player::{Player, GameState, Action};
 
 struct MyPlayer {
     name: String,
@@ -63,7 +66,7 @@ impl Player for MyPlayer {
 ### Basic Minimax Player Implementation
 
 ```rust
-use hidden_game_player::{Action, GameTree, GameState, StaticEvaluator, TranspositionTable};
+use game_player::{Action, GameTree, GameState, StaticEvaluator, TranspositionTable};
 use std::sync::Rc;
 
 // Create components
@@ -90,7 +93,7 @@ game_tree.find_best_response(&mut current_state);
 ### Custom Game State
 
 ```rust
-use hidden_game_player::GameState;
+use game_player::GameState;
 
 struct MyGameState {
     // Your game state data
