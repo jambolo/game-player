@@ -71,8 +71,9 @@ pub trait ResponseGenerator {
 pub trait Rollout {
     /// The type representing the game state
     type State: State;
+    type ResponseGenerator: ResponseGenerator<State = Self::State>;
 
-    /// Performs a rollout (simulation) from the given state and returns the evaluated value.
+    /// Performs a rollout (simulation) from the given state using the provided response generator, and returns the evaluated value.
     ///
     /// The rollout is a simulation of the game from the given state to a terminal state, following simple heuristics or random
     /// moves. The result is a score in the range [-1.0, 1.0], where 1.0 indicates a win for the computer player, -1.0 indicates a
@@ -80,10 +81,11 @@ pub trait Rollout {
     ///
     /// # Arguments
     /// * `state` - The game state to perform the rollout from
+    /// * `response_generator` - The response generator for producing legal actions
     ///
     /// # Returns
     /// [-1.0, 1.0] score representing the outcome of the rollout from the perspective of the computer player.
-    fn play(&self, state: &Self::State) -> f32;
+    fn play(&self, state: &Self::State, response_generator: &Self::ResponseGenerator) -> f32;
 }
 
 /// Represents a node in the MCTS tree
@@ -240,13 +242,18 @@ where
 ///
 /// # Panics
 /// This function will panic if the UCT function ever returns NaN.
-pub fn search<S: State + Clone>(
+pub fn search<S, G, R>(
     s0: &S,
-    rg: &impl ResponseGenerator<State = S>,
-    roll: &impl Rollout<State = S>,
+    rg: &G,
+    roll: &R,
     c: f32,
     max_iterations: u32,
-) -> Option<S::Action> {
+) -> Option<S::Action>
+where
+    S: State + Clone,
+    G: ResponseGenerator<State = S>,
+    R: Rollout<State = S, ResponseGenerator = G>,
+{
     // Create context for the search
     let context = Context {
         response_generator: rg,
@@ -395,9 +402,9 @@ where
 fn rollout<G, R>(node_id: NodeId, arena: &Arena<Node<G::State>>, context: &Context<'_, G, R>) -> f32
 where
     G: ResponseGenerator,
-    R: Rollout<State = G::State>,
+    R: Rollout<State = G::State, ResponseGenerator = G>,
 {
-    context.rollout.play(&arena[node_id].get().state)
+    context.rollout.play(&arena[node_id].get().state, &context.response_generator)
 }
 
 // Back-propagates the value up the tree
@@ -526,8 +533,9 @@ mod tests {
 
     impl Rollout for TestRollout {
         type State = TestGameState;
+        type ResponseGenerator = TestResponseGenerator;
 
-        fn play(&self, _state: &TestGameState) -> f32 {
+        fn play(&self, _state: &TestGameState, _rg: &TestResponseGenerator) -> f32 {
             0.5 // Simple fixed rollout value for testing
         }
     }
