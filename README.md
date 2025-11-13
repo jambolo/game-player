@@ -4,6 +4,9 @@ This crate provides the base components for implementing a player in a two-perso
 
 This is a **WORK IN PROGRESS**
 
+![Rust Workflow](https://github.com/jambolo/game-player/actions/workflows/rust.yml/badge.svg)
+[![codecov](https://codecov.io/gh/jambolo/game-player/branch/master/graph/badge.svg)](https://codecov.io/gh/jambolo/game-player)
+
 ## Overview
 
 The game-player crate implements the basic components of a generic player in a two-person game. It provides:
