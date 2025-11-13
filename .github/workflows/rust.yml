@@ -16,11 +16,6 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-      with:
-        submodules: 'recursive'    # ensure submodules (and nested submodules) are checked out
-        fetch-depth: 0             # get full history
-        persist-credentials: true  # allow use of $GITHUB_TOKEN for submodule fetch
-        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Cache Cargo registry and target
       uses: actions/cache@v4
@@ -30,11 +25,6 @@ jobs:
           ~/.cargo/registry
           ~/.cargo/git
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Init and update submodules
-      run: |
-        git submodule sync --recursive
-        git submodule update --init --recursive
 
     - name: Check code formatting
       run: cargo fmt --all -- --check 2>&1 | tee fmt.log
