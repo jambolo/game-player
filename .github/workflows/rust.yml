@@ -9,6 +9,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  TOOLCHAIN: stable
+  TARPAULIN_VERSION: 0.24.0
 
 jobs:
   build:
@@ -17,8 +19,15 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
+    - name: Setup Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{ env.TOOLCHAIN }}
+        components: clippy
+        override: true
+
     - name: Ensure cache directories exist
-      run: mkdir -p target ~/.cargo/registry ~/.cargo/git
+      run: mkdir -p target ~/.cargo/registry ~/.cargo/git ~/.cargo/bin
 
     - name: Cache Cargo registry and target
       uses: actions/cache@v4
@@ -27,7 +36,8 @@ jobs:
           - target
           - ~/.cargo/registry
           - ~/.cargo/git
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          - ~/.cargo/bin
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ env.TOOLCHAIN }}-${{ env.TARPAULIN_VERSION }}
         restore-keys: |
           ${{ runner.os }}-cargo-
 
@@ -45,7 +55,7 @@ jobs:
 
     - name: Generate code coverage
       run: |
-        cargo install cargo-tarpaulin
+        cargo install cargo-tarpaulin --version ${{ env.TARPAULIN_VERSION }} --locked || cargo tarpaulin --version
         cargo tarpaulin --out Xml 2>&1 | tee coverage.log
       continue-on-error: true
 
