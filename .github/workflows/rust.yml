@@ -17,14 +17,19 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
+    - name: Ensure cache directories exist
+      run: mkdir -p target ~/.cargo/registry ~/.cargo/git
+
     - name: Cache Cargo registry and target
       uses: actions/cache@v4
       with:
         path:
-          target
-          ~/.cargo/registry
-          ~/.cargo/git
+          - target
+          - ~/.cargo/registry
+          - ~/.cargo/git
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
 
     - name: Check code formatting
       run: cargo fmt --all -- --check 2>&1 | tee fmt.log
