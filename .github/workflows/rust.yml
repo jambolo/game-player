@@ -37,19 +37,21 @@ jobs:
         git submodule update --init --recursive
 
     - name: Check code formatting
-      run: cargo fmt --all -- --check
+      run: cargo fmt --all -- --check 2>&1 | tee fmt.log
 
     - name: Lint with Clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: cargo clippy --all-targets --all-features -- -D warnings 2>&1 | tee clippy.log
 
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose 2>&1 | tee build.log
 
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose 2>&1 | tee test.log
 
     - name: Generate code coverage
-      run: cargo install cargo-tarpaulin && cargo tarpaulin --out Xml
+      run: |
+        cargo install cargo-tarpaulin
+        cargo tarpaulin --out Xml 2>&1 | tee coverage.log
       continue-on-error: true
 
     - name: Upload coverage to Codecov
@@ -57,3 +59,20 @@ jobs:
       with:
         files: tarpaulin-report.xml
         fail_ci_if_error: false
+
+    - name: CI failure summary
+      if: failure()
+      run: |
+        echo "### CI Failure Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        for f in fmt.log clippy.log build.log test.log coverage.log; do
+          if [ -f "$f" ]; then
+            echo "#### $f" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            # show lines that are most likely relevant
+            grep -nE "error\[|error:|panic|panicked at|thread 'panicked'|failed" "$f" >> $GITHUB_STEP_SUMMARY || true
+            # include a short tail of the log for more context
+            tail -n 200 "$f" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+        done
