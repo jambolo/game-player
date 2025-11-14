@@ -171,32 +171,19 @@ pub fn search<S: State>(
     s0: &Rc<S>,
     max_depth: i32,
 ) -> Option<Rc<S>> {
-    let context = Context {
-        tt,
-        sef,
-        rg,
-        max_depth,
-    };
+    let context = Context { tt, sef, rg, max_depth };
     if s0.whose_turn() == PlayerId::ALICE as u8 {
         if let Some(response) = alice_search(&context, s0, -f32::INFINITY, f32::INFINITY, 0) {
             return Some(Rc::clone(&response.state));
         }
-    } else {
-        if let Some(response) = bob_search(&context, s0, -f32::INFINITY, f32::INFINITY, 0) {
-            return Some(Rc::clone(&response.state));
-        }
+    } else if let Some(response) = bob_search(&context, s0, -f32::INFINITY, f32::INFINITY, 0) {
+        return Some(Rc::clone(&response.state));
     }
     None
 }
 
 // Evaluates all of Alice's possible responses to the given state. The returned response is the one with the highest value.
-fn alice_search<S: State>(
-    context: &Context<S>,
-    state: &Rc<S>,
-    mut alpha: f32,
-    beta: f32,
-    depth: i32,
-) -> Option<Response<S>> {
+fn alice_search<S: State>(context: &Context<S>, state: &Rc<S>, mut alpha: f32, beta: f32, depth: i32) -> Option<Response<S>> {
     // Depth of responses to this state
     let response_depth = depth + 1;
     // Quality of a response as a result of a search at this depth.
@@ -211,9 +198,7 @@ fn alice_search<S: State>(
     }
 
     // Sort from highest to lowest in order to increase the chance of triggering a beta cutoff earlier.
-    responses.sort_by(|a, b| {
-        b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    responses.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
 
     // Evaluate each of the responses and choose the one with the highest value
     let mut best_state: Option<&Rc<S>> = None;
@@ -231,15 +216,10 @@ fn alice_search<S: State>(
         // 3. The search has reached its maximum depth.
         let mut value = response.value;
         let mut quality = response.quality;
-        if value < context.sef.alice_wins_value()
-            && response_depth < context.max_depth
-            && quality < search_quality
-        {
+        if value < context.sef.alice_wins_value() && response_depth < context.max_depth && quality < search_quality {
             // Update the value of Alice's response by evaluating Bob's responses to it. If Bob has no response, then
             // leave the response's value and quality as is.
-            if let Some(bob_response) =
-                bob_search(&context, &response.state, alpha, beta, response_depth)
-            {
+            if let Some(bob_response) = bob_search(context, &response.state, alpha, beta, response_depth) {
                 value = bob_response.value;
                 quality = bob_response.quality;
             }
@@ -295,7 +275,10 @@ fn alice_search<S: State>(
     // Save the value of this state in the T-table if the ply was not pruned. Pruning results in an incorrect value because the
     // search was interrupted and potentially better responses were not considered.
     if !pruned {
-        context.tt.borrow_mut().update(state.fingerprint(), best_value, best_quality + 1);
+        context
+            .tt
+            .borrow_mut()
+            .update(state.fingerprint(), best_value, best_quality + 1);
     }
 
     Some(Response::<S> {
@@ -306,13 +289,7 @@ fn alice_search<S: State>(
 }
 
 // Evaluates all of Bob's possible responses to the given state. The returned response is the one with the lowest value.
-fn bob_search<S: State>(
-    context: &Context<S>,
-    state: &Rc<S>,
-    alpha: f32,
-    mut beta: f32,
-    depth: i32,
-) -> Option<Response<S>> {
+fn bob_search<S: State>(context: &Context<S>, state: &Rc<S>, alpha: f32, mut beta: f32, depth: i32) -> Option<Response<S>> {
     // Depth of responses to this state
     let response_depth = depth + 1;
     // Quality of a response as a result of a search at this depth.
@@ -327,9 +304,7 @@ fn bob_search<S: State>(
     }
 
     // Sort from lowest to highest in order to increase the chance of triggering an alpha cutoff earlier
-    responses.sort_by(|a, b| {
-        a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    responses.sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal));
 
     // Evaluate each of the responses and choose the one with the lowest value
     let mut best_state: Option<&Rc<S>> = None;
@@ -347,13 +322,10 @@ fn bob_search<S: State>(
         // 3. The search has reached its maximum depth.
         let mut value = response.value;
         let mut quality = response.quality;
-        if value > context.sef.bob_wins_value() && response_depth < context.max_depth && quality < search_quality
-        {
+        if value > context.sef.bob_wins_value() && response_depth < context.max_depth && quality < search_quality {
             // Update the value of Bob's response by evaluating Alice's responses to it. If Alice has no response, then
             // leave the response's value and quality as is.
-            if let Some(alice_response) =
-                alice_search(context, &response.state, alpha, beta, response_depth)
-            {
+            if let Some(alice_response) = alice_search(context, &response.state, alpha, beta, response_depth) {
                 value = alice_response.value;
                 quality = alice_response.quality;
             }
@@ -410,7 +382,10 @@ fn bob_search<S: State>(
     // Save the value of this state in the T-table if the ply was not pruned. Pruning results in an incorrect value because the
     // search was interrupted and potentially better responses were not considered.
     if !pruned {
-        context.tt.borrow_mut().update(state.fingerprint(), best_value, best_quality + 1);
+        context
+            .tt
+            .borrow_mut()
+            .update(state.fingerprint(), best_value, best_quality + 1);
     }
 
     Some(Response::<S> {
@@ -421,11 +396,7 @@ fn bob_search<S: State>(
 }
 
 // Generates a list of responses to the given node
-fn generate_responses<S: State>(
-    context: &Context<S>,
-    state: &Rc<S>,
-    depth: i32,
-) -> Vec<Response<S>> {
+fn generate_responses<S: State>(context: &Context<S>, state: &Rc<S>, depth: i32) -> Vec<Response<S>> {
     // Handle the case where node.state might be None
     let responses = context.rg.generate(state, depth);
     responses
@@ -443,10 +414,7 @@ fn generate_responses<S: State>(
 }
 
 // Get a preliminary value of the state from the static evaluator or the transposition table
-fn get_preliminary_value<S: State>(
-    context: &Context<S>,
-    state: &Rc<S>,
-) -> (f32, i16) {
+fn get_preliminary_value<S: State>(context: &Context<S>, state: &Rc<S>) -> (f32, i16) {
     // SEF optimization:
     // Since any value of any state in the T-table has already been computed by search and/or SEF, it has a quality that is at
     // least as good as the quality of the value returned by the SEF. So, if the state being evaluated is in the T-table, then
@@ -462,9 +430,6 @@ fn get_preliminary_value<S: State>(
 
     // Value not in table, so evaluate with static evaluator and store result
     let value = context.sef.evaluate(state);
-    context
-        .tt
-        .borrow_mut()
-        .update(fingerprint, value, SEF_QUALITY);
+    context.tt.borrow_mut().update(fingerprint, value, SEF_QUALITY);
     (value, SEF_QUALITY)
 }

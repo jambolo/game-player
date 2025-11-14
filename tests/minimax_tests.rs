@@ -77,9 +77,7 @@ struct MockStaticEvaluator {
 
 impl MockStaticEvaluator {
     fn new() -> Self {
-        Self {
-            values: HashMap::new(),
-        }
+        Self { values: HashMap::new() }
     }
 
     fn with_value(mut self, state_id: u32, value: f32) -> Self {
@@ -111,9 +109,7 @@ struct MockResponseGenerator {
 
 impl MockResponseGenerator {
     fn new() -> Self {
-        Self {
-            states: HashMap::new(),
-        }
+        Self { states: HashMap::new() }
     }
 
     fn add_state(mut self, state: MockGameState) -> Self {
@@ -128,11 +124,7 @@ impl ResponseGenerator for MockResponseGenerator {
         state
             .children
             .iter()
-            .filter_map(|&child_id| {
-                self.states
-                    .get(&child_id)
-                    .map(|child| Box::new(child.clone()))
-            })
+            .filter_map(|&child_id| self.states.get(&child_id).map(|child| Box::new(child.clone())))
             .collect()
     }
 }
@@ -177,9 +169,7 @@ mod tests {
 
     #[test]
     fn test_mock_static_evaluator() {
-        let evaluator = MockStaticEvaluator::new()
-            .with_value(1, 5.0)
-            .with_value(2, -3.0);
+        let evaluator = MockStaticEvaluator::new().with_value(1, 5.0).with_value(2, -3.0);
 
         let state1 = MockGameState::new(1, PlayerId::ALICE as u8);
         let state2 = MockGameState::new(2, PlayerId::BOB as u8);
@@ -262,8 +252,7 @@ mod tests {
             .add_state(MockGameState::new(3, PlayerId::BOB as u8).with_value(10.0))
             .add_state(MockGameState::new(4, PlayerId::BOB as u8).with_value(3.0));
 
-        let state =
-            Rc::new(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2, 3, 4]));
+        let state = Rc::new(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2, 3, 4]));
 
         let result = search(&tt, &evaluator, &generator, &state, 1);
 
@@ -287,8 +276,7 @@ mod tests {
             .add_state(MockGameState::new(3, PlayerId::ALICE as u8).with_value(10.0))
             .add_state(MockGameState::new(4, PlayerId::ALICE as u8).with_value(3.0));
 
-        let state =
-            Rc::new(MockGameState::new(1, PlayerId::BOB as u8).with_children(vec![2, 3, 4]));
+        let state = Rc::new(MockGameState::new(1, PlayerId::BOB as u8).with_children(vec![2, 3, 4]));
 
         let result = search(&tt, &evaluator, &generator, &state, 1);
 

@@ -10,7 +10,7 @@ use crate::state::State;
 use indextree::{Arena, NodeId};
 
 /// Default exploration constant for the UCT formula
-pub const DEFAULT_EXPLORATION_CONSTANT: f32 = 1.4142135623730951; // sqrt(2)
+pub const DEFAULT_EXPLORATION_CONSTANT: f32 = std::f32::consts::SQRT_2;
 
 /// Response generator trait for MCTS search
 pub trait ResponseGenerator {
@@ -45,8 +45,8 @@ pub trait ResponseGenerator {
 /// # Examples
 ///
 /// ```rust
-/// # use hidden_game_player::mcts::Rollout;
-/// # use hidden_game_player::{State, StaticEvaluator};
+/// # use game_player::mcts::{Rollout, ResponseGenerator};
+/// # use game_player::State;
 /// # #[derive(Debug, Clone, Default)]
 /// # struct TestGameState { value: i32 }
 /// # impl State for TestGameState {
@@ -58,14 +58,21 @@ pub trait ResponseGenerator {
 /// # }
 /// #[derive(Debug, Clone, Default)]
 /// struct TestAction;
+/// struct TestResponseGen;
+/// impl ResponseGenerator for TestResponseGen {
+///     type State = TestGameState;
+///     fn generate(&self, _state: &TestGameState) -> Vec<TestAction> { vec![TestAction] }
+/// }
 /// struct TestRollout;
 /// impl Rollout for TestRollout {
 ///     type State = TestGameState;
-///     fn play(&self, state: &TestGameState) -> f32 { state.value as f32 }
+///     type ResponseGenerator = TestResponseGen;
+///     fn play(&self, state: &TestGameState, _rg: &TestResponseGen) -> f32 { state.value as f32 }
 /// }
 /// let state = TestGameState { value: 42 };
 /// let rollout = TestRollout;
-/// let score = rollout.play(&state);
+/// let rg = TestResponseGen;
+/// let score = rollout.play(&state, &rg);
 /// assert_eq!(score, 42.0);
 /// ```
 pub trait Rollout {
@@ -96,8 +103,8 @@ pub trait Rollout {
 /// # Examples
 ///
 /// ```rust
-/// # use hidden_game_player::mcts::ResponseGenerator;
-/// # use hidden_game_player::{State, StaticEvaluator};
+/// # use game_player::mcts::ResponseGenerator;
+/// # use game_player::{State, StaticEvaluator};
 /// # use indextree::{Arena, NodeId};
 ///
 /// # #[derive(Debug, Clone, Default)]
@@ -201,12 +208,11 @@ where
             if parent_visits > 0 {
                 let confidence = c * ((parent_visits as f32).ln() / self.visits as f32).sqrt();
                 let mean_value = self.value_sum / self.visits as f32;
-                return mean_value + confidence
+                return mean_value + confidence;
             }
         }
 
         panic!("UCT cannot be computed because the parent node does not exist or has no visits");
-        f32::INFINITY
     }
 }
 
@@ -242,13 +248,7 @@ where
 ///
 /// # Panics
 /// This function will panic if the UCT function ever returns NaN.
-pub fn search<S, G, R>(
-    s0: &S,
-    rg: &G,
-    roll: &R,
-    c: f32,
-    max_iterations: u32,
-) -> Option<S::Action>
+pub fn search<S, G, R>(s0: &S, rg: &G, roll: &R, c: f32, max_iterations: u32) -> Option<S::Action>
 where
     S: State + Clone,
     G: ResponseGenerator<State = S>,
@@ -291,12 +291,11 @@ where
     }
 
     // Get the best child (of root) by the number of visits, or None if there are no children
-    let best_child_id = root_id.children(&arena)
-        .max_by(|&a, &b| {
-            let a_visits = arena[a].get().visits;
-            let b_visits = arena[b].get().visits;
-            a_visits.cmp(&b_visits)
-        });
+    let best_child_id = root_id.children(&arena).max_by(|&a, &b| {
+        let a_visits = arena[a].get().visits;
+        let b_visits = arena[b].get().visits;
+        a_visits.cmp(&b_visits)
+    });
 
     // Return the action that led to the best child
     best_child_id.and_then(|child_id| arena[child_id].get().action.clone())
@@ -340,14 +339,14 @@ where
     // Otherwise, descend to the child with the highest UCT value and continue.
     while !selectable(selected, arena) {
         let children: Vec<NodeId> = selected.children(arena).collect();
-        let best_child = children.iter()
-                .max_by(|&a, &b| {
-                    let a_uct = arena.get(*a).unwrap().get().uct(*a, arena, c);
-                    let b_uct = arena.get(*b).unwrap().get().uct(*b, arena, c);
-                    a_uct.total_cmp(&b_uct)
-                })
-                .unwrap() // Safe to unwrap because not_selectable ensures there are children
-                .clone();
+        let best_child = *children
+            .iter()
+            .max_by(|&a, &b| {
+                let a_uct = arena.get(*a).unwrap().get().uct(*a, arena, c);
+                let b_uct = arena.get(*b).unwrap().get().uct(*b, arena, c);
+                a_uct.total_cmp(&b_uct)
+            })
+            .unwrap(); // Safe to unwrap because not_selectable ensures there are children
         selected = best_child;
     }
 
@@ -404,7 +403,7 @@ where
     G: ResponseGenerator,
     R: Rollout<State = G::State, ResponseGenerator = G>,
 {
-    context.rollout.play(&arena[node_id].get().state, &context.response_generator)
+    context.rollout.play(&arena[node_id].get().state, context.response_generator)
 }
 
 // Back-propagates the value up the tree
@@ -503,11 +502,7 @@ mod tests {
         type State = TestGameState;
 
         fn generate(&self, state: &TestGameState) -> Vec<TestAction> {
-            if state.terminal {
-                vec![]
-            } else {
-                vec![TestAction::new(1)]
-            }
+            if state.terminal { vec![] } else { vec![TestAction::new(1)] }
         }
     }
 
@@ -626,7 +621,10 @@ mod tests {
 
     #[test]
     fn test_mcts_search_basic() {
-        let state = TestGameState { value: 0, terminal: false };
+        let state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
         let generator = TestResponseGenerator;
         let rollout = TestRollout;
 
@@ -638,7 +636,10 @@ mod tests {
 
     #[test]
     fn test_mcts_search_terminal_state() {
-        let state = TestGameState { value: 0, terminal: true };
+        let state = TestGameState {
+            value: 0,
+            terminal: true,
+        };
         let generator = TestResponseGenerator;
         let rollout = TestRollout;
 
@@ -649,7 +650,10 @@ mod tests {
 
     #[test]
     fn test_mcts_search_zero_iterations() {
-        let state = TestGameState { value: 0, terminal: false };
+        let state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
         let generator = TestResponseGenerator;
         let rollout = TestRollout;
 
@@ -662,7 +666,10 @@ mod tests {
 
     #[test]
     fn test_mcts_search_different_c_values() {
-        let state = TestGameState { value: 0, terminal: false };
+        let state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
         let generator = TestResponseGenerator;
         let rollout = TestRollout;
 
@@ -677,7 +684,10 @@ mod tests {
 
     #[test]
     fn test_mcts_search_multiple_iterations() {
-        let state = TestGameState { value: 0, terminal: false };
+        let state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
         let generator = TestResponseGenerator;
         let rollout = TestRollout;
 
@@ -692,7 +702,10 @@ mod tests {
 
     #[test]
     fn test_mcts_search_consistency() {
-        let state = TestGameState { value: 5, terminal: false };
+        let state = TestGameState {
+            value: 5,
+            terminal: false,
+        };
         let generator = TestResponseGenerator;
         let rollout = TestRollout;
 

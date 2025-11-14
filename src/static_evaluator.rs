@@ -14,7 +14,7 @@
 /// # Examples
 ///
 /// ```
-/// use hidden_game_player::StaticEvaluator;
+/// use game_player::StaticEvaluator;
 ///
 /// // Simple game state for demonstration
 /// #[derive(Debug)]
