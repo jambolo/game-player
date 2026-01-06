@@ -11,6 +11,7 @@ The game-player crate provides the core traits and search components needed to b
 It provides:
 
 1. A min-max game tree search algorithm using alpha-beta pruning and transposition tables for optimal performance.
+2. A basic Monte Carlo Tree Search algorithm.
 
 ## Documentation
 

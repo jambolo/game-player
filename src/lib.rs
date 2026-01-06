@@ -123,6 +123,7 @@
 //! }
 //! ```
 
+pub mod mcts;
 pub mod minimax;
 pub mod state;
 pub mod static_evaluator;
