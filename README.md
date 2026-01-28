@@ -4,8 +4,10 @@ This crate provides the base components for implementing a player in a two-perso
 
 This is a **WORK IN PROGRESS**
 
-![Rust Workflow](https://github.com/jambolo/game-player/actions/workflows/rust.yml/badge.svg)
-[![codecov](https://codecov.io/gh/jambolo/game-player/branch/master/graph/badge.svg)](https://codecov.io/gh/jambolo/game-player)
+| Branch    | Workflow Status | Coverage |
+|-----------|-----------------|----------|
+| `master`  | ![Release](https://github.com/jambolo/game-player/actions/workflows/release.yml/badge.svg?branch=master) | N/A |
+| `develop` | ![Rust](https://github.com/jambolo/game-player/actions/workflows/rust.yml/badge.svg?branch=develop) | [![codecov](https://codecov.io/gh/jambolo/game-player/branch/develop/graph/badge.svg)](https://codecov.io/gh/jambolo/game-player) |
 
 ## Overview
 
