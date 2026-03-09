@@ -114,7 +114,7 @@
 //!     let initial_state = Rc::new(GameState::new());
 //!     let evaluator = GameEvaluator;
 //!     let move_generator = GameMoveGenerator;
-//!     let transposition_table = Rc::new(RefCell::new(TranspositionTable::new(10000, 100)));
+//!     let transposition_table = Rc::new(RefCell::new(TranspositionTable::new(10000)));
 //!
 //!     // Perform minimax search to find best move
 //!     search(&transposition_table, &evaluator, &move_generator, &initial_state, 6)

@@ -1,7 +1,6 @@
 //! Game State Interface
 //!
-//! This module implements the state components and traits, providing the necessary interface for the game-specific state and
-//! logic.
+//! This module implements the state components and traits, providing the necessary interface for the game-specific state and logic.
 
 /// IDs of the players in a two-player game.
 ///
@@ -200,8 +199,7 @@ pub trait State: Sized {
 
     /// Applies an action to the current state, returning a new state as a result of the action.
     ///
-    /// This method creates a new state by applying the given action to the current state.
-    /// The original state remains unchanged (immutable transformation).
+    /// The original state remains unchanged.
     ///
     /// # Arguments
     /// * `action` - The action to apply to the current state

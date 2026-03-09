@@ -33,7 +33,7 @@ use crate::state::*;
 use crate::static_evaluator::*;
 use crate::transposition_table::*;
 
-static SEF_QUALITY: i16 = 0; // Quality of a value returned by the static evaluation function
+static SEF_QUALITY: i16 = 0; // Quality of a value returned by the static evaluation function.
 
 // Holds evaluation information about a response.
 struct Response<S> {
@@ -89,23 +89,22 @@ where
 /// # Implementation Notes
 /// - Return an empty vector if no moves are available (player cannot respond)
 /// - If passing is allowed in the game, include a "pass" move as a valid response
-/// - The depth parameter can be used for depth-dependent move generation optimizations
+/// - The depth parameter can be used for depth-dependent move generation optimizations.
 pub trait ResponseGenerator {
     /// The type representing game states that this generator works with
     type State: State;
 
     /// Generates a list of all possible responses to the given state.
     ///
-    /// This method should return all legal moves available to the current player in the given state. The implementation
-    /// should be game-specific and handle all rules and constraints of the particular game being played.
+    /// This method should return all legal moves available to the current player in the given state. The implementation should be
+    /// game-specific and handle all rules and constraints of the particular game being played.
     ///
     /// # Arguments
     /// * `state` - The current state to generate responses for
     /// * `depth` - Current search depth (ply number), useful for optimizations
     ///
     /// # Returns
-    /// A vector of boxed game states representing all possible moves.
-    /// Returns an empty vector if no moves are available.
+    /// A vector of boxed game states representing all possible moves, or an empty vector if no moves are available.
     ///
     /// # Examples
     /// ```rust,ignore
@@ -120,8 +119,8 @@ pub trait ResponseGenerator {
     /// The caller gains ownership of the returned states.
     ///
     /// # Note
-    /// Returning no responses indicates that the player cannot respond. It does not necessarily indicate that the game is
-    /// over or that the player has passed. If passing is allowed, then a "pass" state should be a valid response.
+    /// Returning no responses indicates that the player cannot respond. It does not necessarily indicate that the game is over or
+    /// that the player has passed. If passing is allowed, then a "pass" state should be a valid response.
     fn generate(&self, state: &Rc<Self::State>, depth: i32) -> Vec<Box<Self::State>>;
 }
 
@@ -174,13 +173,7 @@ pub trait ResponseGenerator {
 /// - **Alpha-beta pruning**: Early termination of unpromising branches
 /// - **Transposition table**: Caching of previously evaluated positions
 /// - **Move ordering**: Better moves searched first for more effective pruning
-pub fn search<S, E, R>(
-    tt: &Rc<RefCell<TranspositionTable>>,
-    sef: &E,
-    rg: &R,
-    s0: &Rc<S>,
-    max_depth: i32,
-) -> Option<Rc<S>>
+pub fn search<S, E, R>(tt: &Rc<RefCell<TranspositionTable>>, sef: &E, rg: &R, s0: &Rc<S>, max_depth: i32) -> Option<Rc<S>>
 where
     S: State,
     E: StaticEvaluator<S>,
@@ -206,13 +199,7 @@ where
 }
 
 // Evaluates all of Alice's possible responses to the given state. The returned response is the one with the highest value.
-fn alice_search<S, E, R>(
-    context: &Context<S, E, R>,
-    state: &Rc<S>,
-    mut alpha: f32,
-    beta: f32,
-    depth: i32,
-) -> Option<Response<S>>
+fn alice_search<S, E, R>(context: &Context<S, E, R>, state: &Rc<S>, mut alpha: f32, beta: f32, depth: i32) -> Option<Response<S>>
 where
     S: State,
     E: StaticEvaluator<S>,
@@ -232,9 +219,7 @@ where
     }
 
     // Sort from highest to lowest in order to increase the chance of triggering a beta cutoff earlier.
-    responses.sort_by(|a, b| {
-        b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    responses.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
 
     // Evaluate each of the responses and choose the one with the highest value
     let mut best_state: Option<&Rc<S>> = None;
@@ -243,24 +228,18 @@ where
     let mut pruned = false;
 
     for response in &responses {
-        // Replace the preliminary value and quality of this response with the value and quality of Bob's subsequent response
-        // to it.
+        // Replace the preliminary value and quality of this response with the value and quality of Bob's subsequent response to it.
         // The following conditions will cause the search to be skipped:
         // 1. The preliminary value indicates a win for Alice.
-        // 2. The preliminary quality is more than the quality of a search. This can be a result of obtaining the preliminary
-        //    value from the result of a previous search stored in the transposition table.
+        // 2. The preliminary quality is more than the quality of a search. This can be a result of obtaining the preliminary value
+        //    from the result of a previous search stored in the transposition table.
         // 3. The search has reached its maximum depth.
         let mut value = response.value;
         let mut quality = response.quality;
-        if value < context.sef.alice_wins_value()
-            && response_depth < context.max_depth
-            && quality < search_quality
-        {
-            // Update the value of Alice's response by evaluating Bob's responses to it. If Bob has no response, then
-            // leave the response's value and quality as is.
-            if let Some(bob_response) =
-                bob_search(&context, &response.state, alpha, beta, response_depth)
-            {
+        if value < context.sef.alice_wins_value() && response_depth < context.max_depth && quality < search_quality {
+            // Update the value of Alice's response by evaluating Bob's responses to it. If Bob has no response, then leave the
+            // response's value and quality as is.
+            if let Some(bob_response) = bob_search(&context, &response.state, alpha, beta, response_depth) {
                 value = bob_response.value;
                 quality = bob_response.quality;
             }
@@ -280,10 +259,10 @@ where
 
             // alpha-beta pruning (beta cutoff) Here's how it works:
             //
-            // Bob is looking for the lowest value. The 'beta' is the value of Bob's best response found so far in the previous
-            // ply. If the value of this response is higher than the beta, then Bob will never choose a response leading to this
-            // response because the result is worse than the result of a response Bob has already found. As such, there is no
-            // reason to continue.
+            // Bob is looking for the lowest value. The 'beta' is the value of Bob's best response found so far in the previous ply.
+            // If the value of this response is higher than the beta, then Bob will never choose a response leading to this response
+            // because the result is worse than the result of a response Bob has already found. As such, there is no reason to
+            // continue.
             if best_value > beta {
                 // Beta cutoff
                 pruned = true;
@@ -292,11 +271,11 @@ where
 
             // alpha-beta pruning (alpha) Here's how it works:
             //
-            // Alice is looking for the highest value. The 'alpha' is the value of Alice's best response found so far. If the
-            // value of this response is higher than the alpha, then it is a better response for Alice. The alpha is
-            // subsequently passed to Bob's search so that if Bob finds a response with a lower value than the alpha, then
-            // there is no reason to continue because Alice already has a better response and will choose it instead of allowing
-            // Bob to make a move with a lower value.
+            // Alice is looking for the highest value. The 'alpha' is the value of Alice's best response found so far. If the value
+            // of this response is higher than the alpha, then it is a better response for Alice. The alpha is subsequently passed
+            // to Bob's search so that if Bob finds a response with a lower value than the alpha, then there is no reason to
+            // continue because Alice already has a better response and will choose it instead of allowing Bob to make a move with a
+            // lower value.
             if best_value > alpha {
                 alpha = best_value;
             }
@@ -310,13 +289,15 @@ where
     // Just in case
     best_state.as_ref()?;
 
-    // At this point, the value of this state becomes the value of the best response to it, and the quality becomes its
-    // quality + 1.
+    // At this point, the value of this state becomes the value of the best response to it, and the quality becomes its quality + 1.
     //
     // Save the value of this state in the T-table if the ply was not pruned. Pruning results in an incorrect value because the
     // search was interrupted and potentially better responses were not considered.
     if !pruned {
-        context.tt.borrow_mut().update(state.fingerprint(), best_value, best_quality + 1);
+        context
+            .tt
+            .borrow_mut()
+            .update(state.fingerprint(), (best_value, best_quality + 1));
     }
 
     Some(Response::<S> {
@@ -327,13 +308,7 @@ where
 }
 
 // Evaluates all of Bob's possible responses to the given state. The returned response is the one with the lowest value.
-fn bob_search<S, E, R>(
-    context: &Context<S, E, R>,
-    state: &Rc<S>,
-    alpha: f32,
-    mut beta: f32,
-    depth: i32,
-) -> Option<Response<S>>
+fn bob_search<S, E, R>(context: &Context<S, E, R>, state: &Rc<S>, alpha: f32, mut beta: f32, depth: i32) -> Option<Response<S>>
 where
     S: State,
     E: StaticEvaluator<S>,
@@ -353,9 +328,7 @@ where
     }
 
     // Sort from lowest to highest in order to increase the chance of triggering an alpha cutoff earlier
-    responses.sort_by(|a, b| {
-        a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    responses.sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal));
 
     // Evaluate each of the responses and choose the one with the lowest value
     let mut best_state: Option<&Rc<S>> = None;
@@ -364,22 +337,18 @@ where
     let mut pruned = false;
 
     for response in &responses {
-        // Replace the preliminary value and quality of this response with the value and quality of Alice's subsequent response
-        // to it.
-        // The following conditions will cause the search to be skipped:
+        // Replace the preliminary value and quality of this response with the value and quality of Alice's subsequent response to
+        // it. The following conditions will cause the search to be skipped:
         // 1. The preliminary value indicates a win for Bob.
-        // 2. The preliminary quality is more than the quality of a search. This can be a result of obtaining the preliminary
-        //    value from the result of a previous search stored in the transposition table.
+        // 2. The preliminary quality is more than the quality of a search. This can be a result of obtaining the preliminary value
+        //    from the result of a previous search stored in the transposition table.
         // 3. The search has reached its maximum depth.
         let mut value = response.value;
         let mut quality = response.quality;
-        if value > context.sef.bob_wins_value() && response_depth < context.max_depth && quality < search_quality
-        {
-            // Update the value of Bob's response by evaluating Alice's responses to it. If Alice has no response, then
-            // leave the response's value and quality as is.
-            if let Some(alice_response) =
-                alice_search(context, &response.state, alpha, beta, response_depth)
-            {
+        if value > context.sef.bob_wins_value() && response_depth < context.max_depth && quality < search_quality {
+            // Update the value of Bob's response by evaluating Alice's responses to it. If Alice has no response, then leave the
+            // response's value and quality as is.
+            if let Some(alice_response) = alice_search(context, &response.state, alpha, beta, response_depth) {
                 value = alice_response.value;
                 quality = alice_response.quality;
             }
@@ -412,11 +381,11 @@ where
 
             // alpha-beta pruning (beta) Here's how it works:
             //
-            // Bob is looking for the lowest value. The 'beta' is the value of Bob's best response found so far. If the
-            // value of this response is lower than the beta, then it is a better response for Bob. The beta is subsequently passed
-            // to Alice's search so that if Alice finds a response with a higher value than the beta, then there is no reason to
-            // continue because Bob already has a better response and will choose it instead of allowing Alice to make a move with
-            // a higher value.
+            // Bob is looking for the lowest value. The 'beta' is the value of Bob's best response found so far. If the value of
+            // this response is lower than the beta, then it is a better response for Bob. The beta is subsequently passed to
+            // Alice's search so that if Alice finds a response with a higher value than the beta, then there is no reason to
+            // continue because Bob already has a better response and will choose it instead of allowing Alice to make a move with a
+            // higher value.
             if best_value < beta {
                 beta = best_value;
             }
@@ -427,16 +396,18 @@ where
     assert!(best_quality >= 0); // Sanity check
     assert!(best_state.is_some()); // Sanity check
 
-    // Just in case
+    // Just in case a best case was never found, return None.
     best_state.as_ref()?;
 
-    // At this point, the value of this state becomes the value of the best response to it, and the quality becomes its
-    // quality + 1.
-    //
+    // At this point, the value of this state becomes the value of the best response to it, and the quality becomes its quality + 1.
+
     // Save the value of this state in the T-table if the ply was not pruned. Pruning results in an incorrect value because the
     // search was interrupted and potentially better responses were not considered.
     if !pruned {
-        context.tt.borrow_mut().update(state.fingerprint(), best_value, best_quality + 1);
+        context
+            .tt
+            .borrow_mut()
+            .update(state.fingerprint(), (best_value, best_quality + 1));
     }
 
     Some(Response::<S> {
@@ -446,18 +417,14 @@ where
     })
 }
 
-// Generates a list of responses to the given node
-fn generate_responses<S, E, R>(
-    context: &Context<S, E, R>,
-    state: &Rc<S>,
-    depth: i32,
-) -> Vec<Response<S>>
+// Generates a list of responses to the given node.
+fn generate_responses<S, E, R>(context: &Context<S, E, R>, state: &Rc<S>, depth: i32) -> Vec<Response<S>>
 where
     S: State,
     E: StaticEvaluator<S>,
     R: ResponseGenerator<State = S>,
 {
-    // Handle the case where node.state might be None
+    // Handle the case where node.state might be None.
     let responses = context.rg.generate(state, depth);
     responses
         .into_iter()
@@ -473,34 +440,27 @@ where
         .collect()
 }
 
-// Get a preliminary value of the state from the static evaluator or the transposition table
-fn get_preliminary_value<S, E, R>(
-    context: &Context<S, E, R>,
-    state: &Rc<S>,
-) -> (f32, i16)
+// Get a preliminary value of the state from the static evaluator or the transposition table.
+fn get_preliminary_value<S, E, R>(context: &Context<S, E, R>, state: &Rc<S>) -> (f32, i16)
 where
     S: State,
     E: StaticEvaluator<S>,
     R: ResponseGenerator<State = S>,
 {
-    // SEF optimization:
-    // Since any value of any state in the T-table has already been computed by search and/or SEF, it has a quality that is at
-    // least as good as the quality of the value returned by the SEF. So, if the state being evaluated is in the T-table, then
-    // the value in the T-table is used instead of running the SEF because T-table lookup is so much faster than the SEF.
-
-    // If it is in the T-table then use that value, otherwise evaluate the state and save the value.
+    // SEF optimization: Since any value of any state in the T-table has already been computed by search and/or SEF, it has a
+    // quality that is at least as good as the quality of the value returned by the SEF. So, if the state is in the T-table, then
+    // the value in the T-table is used instead of running the SEF because T-table lookup is much faster. If it is in the T-table
+    // then use that value, otherwise evaluate the state and save the value.
     let fingerprint = state.fingerprint();
 
-    // First, check if the value is in the transposition table
-    if let Some(cached_value) = context.tt.borrow_mut().check(fingerprint, -1) {
+    // First, check if the value is in the transposition table (don't care about quality).
+    if let Some(cached_value) = context.tt.borrow().check(fingerprint, -1) {
         return cached_value;
     }
 
-    // Value not in table, so evaluate with static evaluator and store result
-    let value = context.sef.evaluate(state);
-    context
-        .tt
-        .borrow_mut()
-        .update(fingerprint, value, SEF_QUALITY);
-    (value, SEF_QUALITY)
+    // Value not in table, so evaluate with static evaluator and store result.
+    let entry = (context.sef.evaluate(state), SEF_QUALITY);
+    context.tt.borrow_mut().update(fingerprint, entry);
+
+    entry
 }

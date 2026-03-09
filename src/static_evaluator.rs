@@ -4,12 +4,12 @@
 
 /// An interface for static evaluation functions.
 ///
-/// A static evaluation function assigns a value to a game state without any lookahead. The value represents the
-/// "goodness" of the state from Alice's perspective. Alice seeks to maximize the value and Bob seeks to minimize it.
+/// A static evaluation function assigns a value to a game state without any lookahead. The value represents the "goodness" of the
+/// state from Alice's perspective. Alice seeks to maximize the value and Bob seeks to minimize it.
 ///
-/// The values returned by the static evaluation function should be in the range [bobWinsValue(), aliceWinsValue()].
-/// If the game is over and Alice has won, then the function should return aliceWinsValue(). If the game is over and
-/// Bob has won, then the function should return bobWinsValue().
+/// The values returned by the static evaluation function should be in the range [bob_wins_value(), alice_wins_value()]. If the game
+/// is over and Alice has won, then the function should return alice_wins_value(). If the game is over and Bob has won, then the
+/// function should return bob_wins_value().
 pub trait StaticEvaluator<G> {
     /// Evaluates the given state and returns its value from Alice's perspective.
     ///
