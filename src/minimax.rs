@@ -186,31 +186,38 @@ where
         max_depth,
         _phantom: std::marker::PhantomData,
     };
-    if s0.whose_turn() == PlayerId::ALICE as u8 {
-        if let Some(response) = alice_search(&context, s0, -f32::INFINITY, f32::INFINITY, 0) {
-            return Some(Rc::clone(&response.state));
-        }
+    let player = if s0.whose_turn() == PlayerId::ALICE as u8 {
+        PlayerId::ALICE
     } else {
-        if let Some(response) = bob_search(&context, s0, -f32::INFINITY, f32::INFINITY, 0) {
-            return Some(Rc::clone(&response.state));
-        }
+        PlayerId::BOB
+    };
+    if let Some(response) = search_recursive(&context, s0, -f32::INFINITY, f32::INFINITY, 1, player) {
+        return Some(Rc::clone(&response.state));
     }
     None
 }
 
-// Evaluates all of Alice's possible responses to the given state. The returned response is the one with the highest value.
-fn alice_search<S, E, R>(context: &Context<S, E, R>, state: &Rc<S>, mut alpha: f32, beta: f32, depth: i32) -> Option<Response<S>>
+// Evaluates all of the current player's possible responses to the given state. The returned response is the one with the best value
+// for that player.
+fn search_recursive<S, E, R>(
+    context: &Context<S, E, R>,
+    state: &Rc<S>,
+    mut alpha: f32,
+    mut beta: f32,
+    depth: i32,
+    player: PlayerId,
+) -> Option<Response<S>>
 where
     S: State,
     E: StaticEvaluator<S>,
     R: ResponseGenerator<State = S>,
 {
-    // Depth of responses to this state
-    let response_depth = depth + 1;
-    // Quality of a response as a result of a search at this depth.
-    let search_quality = (context.max_depth - response_depth) as i16;
+    let maximizing = player == PlayerId::ALICE;
 
-    // Generate a list of the possible responses to this state by Alice. The responses are initialized with preliminary values.
+    // Quality of the value of the returned response
+    let this_quality = (context.max_depth - depth) as i16;
+
+    // Generate a list of the possible responses to this state. The responses are initialized with preliminary values.
     let mut responses = generate_responses(context, state, depth);
 
     // If there are no responses, return without a response. It's up to the caller to decide how to handle this case.
@@ -218,181 +225,103 @@ where
         return None;
     }
 
-    // Sort from highest to lowest in order to increase the chance of triggering a beta cutoff earlier.
-    responses.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
+    // Sort to increase the chance of pruning earlier. For a maximizing player, sort highest to lowest to hit beta cutoffs earlier.
+    // For a minimizing player, sort lowest to highest to hit alpha cutoffs earlier.
+    if maximizing {
+        responses.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
+    } else {
+        responses.sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal));
+    }
 
-    // Evaluate each of the responses and choose the one with the highest value
+    // Evaluate each of the responses and choose the one with the best value for this player.
     let mut best_state: Option<&Rc<S>> = None;
-    let mut best_value = -f32::INFINITY;
+    let mut best_value = if maximizing { -f32::INFINITY } else { f32::INFINITY };
     let mut best_quality = -1;
     let mut pruned = false;
 
+    let wins_value = if maximizing {
+        context.sef.alice_wins_value()
+    } else {
+        context.sef.bob_wins_value()
+    };
+
     for response in &responses {
-        // Replace the preliminary value and quality of this response with the value and quality of Bob's subsequent response to it.
-        // The following conditions will cause the search to be skipped:
-        // 1. The preliminary value indicates a win for Alice.
+        // Preliminary value and quality of this response, which may be updated by search.
+        let mut value = response.value;
+        let mut quality = response.quality;
+
+        // Replace the preliminary value and quality of this response with the value and quality of the opponent's subsequent
+        // response via search, unless:
+        // 1. The preliminary value indicates a win for this player.
         // 2. The preliminary quality is more than the quality of a search. This can be a result of obtaining the preliminary value
         //    from the result of a previous search stored in the transposition table.
         // 3. The search has reached its maximum depth.
-        let mut value = response.value;
-        let mut quality = response.quality;
-        if value < context.sef.alice_wins_value() && response_depth < context.max_depth && quality < search_quality {
-            // Update the value of Alice's response by evaluating Bob's responses to it. If Bob has no response, then leave the
-            // response's value and quality as is.
-            if let Some(bob_response) = bob_search(&context, &response.state, alpha, beta, response_depth) {
-                value = bob_response.value;
-                quality = bob_response.quality;
+        let preliminary_is_not_a_winner = if maximizing {
+            response.value < wins_value
+        } else {
+            value > wins_value
+        };
+
+        if preliminary_is_not_a_winner && depth < context.max_depth && response.quality < this_quality {
+            // Update the value by evaluating the opponent's responses. If the opponent has no response, leave the value and quality
+            // as is.
+            if let Some(opponent_response) = search_recursive(context, &response.state, alpha, beta, depth + 1, player.other()) {
+                value = opponent_response.value;
+                quality = opponent_response.quality;
             }
         }
 
-        // Determine if this response's value is the best so far. If so, then save the value and do alpha-beta pruning
-        if value > best_value {
+        // Determine if this response's value is the best so far. If so, then save the value and do alpha-beta pruning.
+        let is_better = if maximizing { value > best_value } else { value < best_value };
+
+        if is_better {
             // Save it
             best_state = Some(&response.state);
             best_value = value;
             best_quality = quality;
 
-            // If Alice wins with this response, then there is no reason to look for anything better
-            if best_value >= context.sef.alice_wins_value() {
+            // If this player wins with this response, then there is no reason to look for anything better.
+            let is_winner = if maximizing {
+                best_value >= wins_value
+            } else {
+                best_value <= wins_value
+            };
+
+            if is_winner {
                 break;
             }
 
-            // alpha-beta pruning (beta cutoff) Here's how it works:
-            //
-            // Bob is looking for the lowest value. The 'beta' is the value of Bob's best response found so far in the previous ply.
-            // If the value of this response is higher than the beta, then Bob will never choose a response leading to this response
-            // because the result is worse than the result of a response Bob has already found. As such, there is no reason to
-            // continue.
-            if best_value > beta {
-                // Beta cutoff
-                pruned = true;
-                break;
-            }
-
-            // alpha-beta pruning (alpha) Here's how it works:
-            //
-            // Alice is looking for the highest value. The 'alpha' is the value of Alice's best response found so far. If the value
-            // of this response is higher than the alpha, then it is a better response for Alice. The alpha is subsequently passed
-            // to Bob's search so that if Bob finds a response with a lower value than the alpha, then there is no reason to
-            // continue because Alice already has a better response and will choose it instead of allowing Bob to make a move with a
-            // lower value.
-            if best_value > alpha {
-                alpha = best_value;
+            // alpha-beta pruning: cutoff and bound update logic
+            if maximizing {
+                // Beta cutoff: if best value exceeds beta, the opponent will not allow this line.
+                if best_value > beta {
+                    pruned = true;
+                    break;
+                }
+                // Update alpha: this is the best value found so far for the maximizing player.
+                if best_value > alpha {
+                    alpha = best_value;
+                }
+            } else {
+                // Alpha cutoff: if best value is below alpha, the opponent will not allow this line.
+                if best_value < alpha {
+                    pruned = true;
+                    break;
+                }
+                // Update beta: this is the best value found so far for the minimizing player.
+                if best_value < beta {
+                    beta = best_value;
+                }
             }
         }
     }
 
-    assert!(best_value > -f32::INFINITY); // Sanity check
-    assert!(best_quality >= 0); // Sanity check
-    assert!(best_state.is_some()); // Sanity check
-
-    // Just in case
-    best_state.as_ref()?;
-
-    // At this point, the value of this state becomes the value of the best response to it, and the quality becomes its quality + 1.
-    //
-    // Save the value of this state in the T-table if the ply was not pruned. Pruning results in an incorrect value because the
-    // search was interrupted and potentially better responses were not considered.
-    if !pruned {
-        context
-            .tt
-            .borrow_mut()
-            .update(state.fingerprint(), (best_value, best_quality + 1));
-    }
-
-    Some(Response::<S> {
-        state: Rc::clone(best_state?),
-        value: best_value,
-        quality: best_quality + 1,
-    })
-}
-
-// Evaluates all of Bob's possible responses to the given state. The returned response is the one with the lowest value.
-fn bob_search<S, E, R>(context: &Context<S, E, R>, state: &Rc<S>, alpha: f32, mut beta: f32, depth: i32) -> Option<Response<S>>
-where
-    S: State,
-    E: StaticEvaluator<S>,
-    R: ResponseGenerator<State = S>,
-{
-    // Depth of responses to this state
-    let response_depth = depth + 1;
-    // Quality of a response as a result of a search at this depth.
-    let search_quality = (context.max_depth - response_depth) as i16;
-
-    // Generate a list of the possible responses to this state by Bob. The responses are initialized with preliminary values.
-    let mut responses = generate_responses(context, state, depth);
-
-    // If there are no responses, return without a response. It's up to the caller to decide how to handle this case.
-    if responses.is_empty() {
-        return None;
-    }
-
-    // Sort from lowest to highest in order to increase the chance of triggering an alpha cutoff earlier
-    responses.sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Evaluate each of the responses and choose the one with the lowest value
-    let mut best_state: Option<&Rc<S>> = None;
-    let mut best_value = f32::INFINITY;
-    let mut best_quality = -1;
-    let mut pruned = false;
-
-    for response in &responses {
-        // Replace the preliminary value and quality of this response with the value and quality of Alice's subsequent response to
-        // it. The following conditions will cause the search to be skipped:
-        // 1. The preliminary value indicates a win for Bob.
-        // 2. The preliminary quality is more than the quality of a search. This can be a result of obtaining the preliminary value
-        //    from the result of a previous search stored in the transposition table.
-        // 3. The search has reached its maximum depth.
-        let mut value = response.value;
-        let mut quality = response.quality;
-        if value > context.sef.bob_wins_value() && response_depth < context.max_depth && quality < search_quality {
-            // Update the value of Bob's response by evaluating Alice's responses to it. If Alice has no response, then leave the
-            // response's value and quality as is.
-            if let Some(alice_response) = alice_search(context, &response.state, alpha, beta, response_depth) {
-                value = alice_response.value;
-                quality = alice_response.quality;
-            }
-        }
-
-        // Determine if this response's value is the best so far. If so, then save the value and do alpha-beta pruning
-        if value < best_value {
-            // Save it
-            best_state = Some(&response.state);
-            best_value = value;
-            best_quality = quality;
-
-            // If Bob wins with this response, then there is no reason to look for anything better
-            if best_value <= context.sef.bob_wins_value() {
-                break;
-            }
-
-            // alpha-beta pruning (alpha cutoff) Here's how it works:
-            //
-            // Alice is looking for the highest value. The 'alpha' is the value of Alice's best move found so far in the previous
-            // ply. If the value of this response is lower than the alpha, then Alice will never choose a response leading to this
-            // response because the result is worse than the result of a response Alice has already found. As such, there is no
-            // reason to continue.
-
-            if best_value < alpha {
-                // Alpha cutoff
-                pruned = true;
-                break;
-            }
-
-            // alpha-beta pruning (beta) Here's how it works:
-            //
-            // Bob is looking for the lowest value. The 'beta' is the value of Bob's best response found so far. If the value of
-            // this response is lower than the beta, then it is a better response for Bob. The beta is subsequently passed to
-            // Alice's search so that if Alice finds a response with a higher value than the beta, then there is no reason to
-            // continue because Bob already has a better response and will choose it instead of allowing Alice to make a move with a
-            // higher value.
-            if best_value < beta {
-                beta = best_value;
-            }
-        }
-    }
-
-    assert!(best_value < f32::INFINITY); // Sanity check
+    let bound_check = if maximizing {
+        best_value > -f32::INFINITY
+    } else {
+        best_value < f32::INFINITY
+    };
+    assert!(bound_check); // Sanity check
     assert!(best_quality >= 0); // Sanity check
     assert!(best_state.is_some()); // Sanity check
 
