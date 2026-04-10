@@ -11,16 +11,13 @@
 //!
 //! 1. **Implement [`State`] trait**: Provides game state management and move application with associated Action type
 //! 2. **Implement [`StaticEvaluator`] trait**: Evaluates how good a position is for each player
-//! 3. **Implement [`ResponseGenerator`] trait**: Generates all possible moves from a position
+//! 3. **Implement [`ResponseGenerator`](minimax::ResponseGenerator) trait**: Generates all possible moves from a position
 //! 4. **Use [`search`](minimax::search)**: Combines everything to find the optimal move
-//! 5. **Use [`TranspositionTable`]**: Caches evaluations for better performance
 //!
 //! ## Example
 //!
 //! ```rust
-//! use std::cell::RefCell;
-//! use std::rc::Rc;
-//! use game_player::{PlayerId, State, StaticEvaluator, TranspositionTable};
+//! use game_player::{PlayerId, State, StaticEvaluator};
 //! use game_player::minimax::{ResponseGenerator, search};
 //!
 //! // Simple game structures (chess-like for demonstration)
@@ -60,8 +57,8 @@
 //!         self.board ^ (self.current_player as u64) << 63 ^ self.move_count as u64
 //!     }
 //!
-//!     fn whose_turn(&self) -> u8 {
-//!         if self.current_player { PlayerId::ALICE as u8 } else { PlayerId::BOB as u8 }
+//!     fn whose_turn(&self) -> PlayerId {
+//!         if self.current_player { PlayerId::Alice } else { PlayerId::Bob }
 //!     }
 //!
 //!     fn is_terminal(&self) -> bool {
@@ -81,7 +78,9 @@
 //! // 2. Implement static evaluation for your game
 //! struct GameEvaluator;
 //!
-//! impl StaticEvaluator<GameState> for GameEvaluator {
+//! impl StaticEvaluator for GameEvaluator {
+//!     type State = GameState;
+//!
 //!     fn evaluate(&self, state: &GameState) -> f32 {
 //!         if state.is_game_over() {
 //!             return 0.0; // Draw
@@ -100,10 +99,10 @@
 //! impl ResponseGenerator for GameMoveGenerator {
 //!     type State = GameState;
 //!
-//!     fn generate(&self, state: &Rc<Self::State>, _depth: i32) -> Vec<Box<Self::State>> {
+//!     fn generate(&self, state: &Self::State, _depth: u32) -> Vec<Self::State> {
 //!         state.get_possible_moves()
 //!             .into_iter()
-//!             .map(|game_move| Box::new(state.apply(&game_move)))
+//!             .map(|game_move| state.apply(&game_move))
 //!             .collect()
 //!     }
 //! }
@@ -111,14 +110,12 @@
 //! // 4. Use the minimax search to find the best move
 //! fn find_best_move() -> Option<GameState> {
 //!     // Set up the game components
-//!     let initial_state = Rc::new(GameState::new());
+//!     let initial_state = GameState::new();
 //!     let evaluator = GameEvaluator;
 //!     let move_generator = GameMoveGenerator;
-//!     let transposition_table = Rc::new(RefCell::new(TranspositionTable::new(10000)));
 //!
 //!     // Perform minimax search to find best move
-//!     search(&transposition_table, &evaluator, &move_generator, &initial_state, 6)
-//!         .map(|best_state| (*best_state).clone())
+//!     search(&evaluator, &move_generator, &initial_state, 6)
 //! }
 //!
 //! // Usage: Create an AI that can play your game
@@ -136,4 +133,3 @@ pub mod transposition_table;
 
 pub use state::{PlayerId, State};
 pub use static_evaluator::StaticEvaluator;
-pub use transposition_table::TranspositionTable;

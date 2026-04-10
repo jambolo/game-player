@@ -3,14 +3,11 @@
 //! These tests use mock implementations to verify the correctness of the minimax
 //! algorithm, alpha-beta pruning, and transposition table integration.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use game_player::minimax::{ResponseGenerator, search};
 use game_player::state::{PlayerId, State};
 use game_player::static_evaluator::StaticEvaluator;
-use game_player::transposition_table::TranspositionTable;
 
 /// Mock action type for testing
 #[derive(Debug, Clone, PartialEq)]
@@ -22,13 +19,13 @@ struct MockAction {
 #[derive(Debug, Clone, PartialEq)]
 struct MockGameState {
     id: u32,
-    player: u8,
+    player: PlayerId,
     value: Option<f32>, // Pre-set value for leaf nodes
     children: Vec<u32>, // IDs of child states
 }
 
 impl MockGameState {
-    fn new(id: u32, player: u8) -> Self {
+    fn new(id: u32, player: PlayerId) -> Self {
         Self {
             id,
             player,
@@ -51,7 +48,7 @@ impl MockGameState {
 impl State for MockGameState {
     type Action = MockAction;
 
-    fn whose_turn(&self) -> u8 {
+    fn whose_turn(&self) -> PlayerId {
         self.player
     }
 
@@ -86,7 +83,9 @@ impl MockStaticEvaluator {
     }
 }
 
-impl StaticEvaluator<MockGameState> for MockStaticEvaluator {
+impl StaticEvaluator for MockStaticEvaluator {
+    type State = MockGameState;
+
     fn evaluate(&self, state: &MockGameState) -> f32 {
         state
             .value
@@ -120,11 +119,11 @@ impl MockResponseGenerator {
 
 impl ResponseGenerator for MockResponseGenerator {
     type State = MockGameState;
-    fn generate(&self, state: &Rc<MockGameState>, _depth: i32) -> Vec<Box<MockGameState>> {
+    fn generate(&self, state: &MockGameState, _depth: u32) -> Vec<MockGameState> {
         state
             .children
             .iter()
-            .filter_map(|&child_id| self.states.get(&child_id).map(|child| Box::new(child.clone())))
+            .filter_map(|&child_id| self.states.get(&child_id).cloned())
             .collect()
     }
 }
@@ -135,22 +134,21 @@ mod tests {
 
     #[test]
     fn test_search_returns_none_for_no_moves() {
-        let tt = Rc::new(RefCell::new(TranspositionTable::new(1000)));
         let evaluator = MockStaticEvaluator::new();
         let generator = MockResponseGenerator::new();
-        let state = Rc::new(MockGameState::new(1, PlayerId::ALICE as u8));
+        let state = MockGameState::new(1, PlayerId::Alice);
 
-        let result = search(&tt, &evaluator, &generator, &state, 3);
+        let result = search(&evaluator, &generator, &state, 3);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_response_generator_trait() {
         let generator = MockResponseGenerator::new()
-            .add_state(MockGameState::new(2, PlayerId::BOB as u8))
-            .add_state(MockGameState::new(3, PlayerId::BOB as u8));
+            .add_state(MockGameState::new(2, PlayerId::Bob))
+            .add_state(MockGameState::new(3, PlayerId::Bob));
 
-        let state = Rc::new(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2, 3]));
+        let state = MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]);
 
         let responses = generator.generate(&state, 0);
         assert_eq!(responses.len(), 2);
@@ -161,7 +159,7 @@ mod tests {
     #[test]
     fn test_empty_response_generation() {
         let generator = MockResponseGenerator::new();
-        let state = Rc::new(MockGameState::new(1, PlayerId::ALICE as u8));
+        let state = MockGameState::new(1, PlayerId::Alice);
 
         let responses = generator.generate(&state, 0);
         assert!(responses.is_empty());
@@ -171,9 +169,9 @@ mod tests {
     fn test_mock_static_evaluator() {
         let evaluator = MockStaticEvaluator::new().with_value(1, 5.0).with_value(2, -3.0);
 
-        let state1 = MockGameState::new(1, PlayerId::ALICE as u8);
-        let state2 = MockGameState::new(2, PlayerId::BOB as u8);
-        let state3 = MockGameState::new(3, PlayerId::ALICE as u8);
+        let state1 = MockGameState::new(1, PlayerId::Alice);
+        let state2 = MockGameState::new(2, PlayerId::Bob);
+        let state3 = MockGameState::new(3, PlayerId::Alice);
 
         assert_eq!(evaluator.evaluate(&state1), 5.0);
         assert_eq!(evaluator.evaluate(&state2), -3.0);
@@ -185,9 +183,9 @@ mod tests {
 
     #[test]
     fn test_mock_game_state_terminal() {
-        let state1 = MockGameState::new(1, PlayerId::ALICE as u8);
-        let state2 = MockGameState::new(2, PlayerId::BOB as u8).with_value(5.0);
-        let state3 = MockGameState::new(3, PlayerId::ALICE as u8).with_children(vec![4]);
+        let state1 = MockGameState::new(1, PlayerId::Alice);
+        let state2 = MockGameState::new(2, PlayerId::Bob).with_value(5.0);
+        let state3 = MockGameState::new(3, PlayerId::Alice).with_children(vec![4]);
 
         assert!(!state1.is_terminal()); // No children, no value
         assert!(state2.is_terminal()); // Has value, no children
@@ -196,8 +194,8 @@ mod tests {
 
     #[test]
     fn test_mock_game_state_fingerprint() {
-        let state1 = MockGameState::new(100, PlayerId::ALICE as u8);
-        let state2 = MockGameState::new(200, PlayerId::BOB as u8);
+        let state1 = MockGameState::new(100, PlayerId::Alice);
+        let state2 = MockGameState::new(200, PlayerId::Bob);
 
         assert_eq!(state1.fingerprint(), 100);
         assert_eq!(state2.fingerprint(), 200);
@@ -206,55 +204,29 @@ mod tests {
 
     #[test]
     fn test_mock_game_state_whose_turn() {
-        let alice_state = MockGameState::new(1, PlayerId::ALICE as u8);
-        let bob_state = MockGameState::new(2, PlayerId::BOB as u8);
+        let alice_state = MockGameState::new(1, PlayerId::Alice);
+        let bob_state = MockGameState::new(2, PlayerId::Bob);
 
-        assert_eq!(alice_state.whose_turn(), PlayerId::ALICE as u8);
-        assert_eq!(bob_state.whose_turn(), PlayerId::BOB as u8);
-    }
-
-    #[test]
-    fn test_transposition_table_integration() {
-        let mut tt = TranspositionTable::new(100);
-
-        // Test basic operations
-        let fingerprint = 12345u64;
-        let value = 3.5f32;
-        let quality = 10i16;
-
-        // Update the table
-        tt.update(fingerprint, (value, quality));
-
-        // Check that it was stored correctly
-        let result = tt.check(fingerprint, -1);
-        assert_eq!(result, Some((value, quality)));
-
-        // Test minimum quality filtering
-        let result_high_quality = tt.check(fingerprint, 15);
-        assert_eq!(result_high_quality, None);
-
-        let result_low_quality = tt.check(fingerprint, 5);
-        assert_eq!(result_low_quality, Some((value, quality)));
+        assert_eq!(alice_state.whose_turn(), PlayerId::Alice);
+        assert_eq!(bob_state.whose_turn(), PlayerId::Bob);
     }
 
     #[test]
     fn test_search_alice_picks_best_move() {
-        let tt = Rc::new(RefCell::new(TranspositionTable::new(1000)));
-
         let evaluator = MockStaticEvaluator::new()
             .with_value(2, 5.0)
             .with_value(3, 10.0)
             .with_value(4, 3.0);
 
         let generator = MockResponseGenerator::new()
-            .add_state(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2, 3, 4]))
-            .add_state(MockGameState::new(2, PlayerId::BOB as u8).with_value(5.0))
-            .add_state(MockGameState::new(3, PlayerId::BOB as u8).with_value(10.0))
-            .add_state(MockGameState::new(4, PlayerId::BOB as u8).with_value(3.0));
+            .add_state(MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3, 4]))
+            .add_state(MockGameState::new(2, PlayerId::Bob).with_value(5.0))
+            .add_state(MockGameState::new(3, PlayerId::Bob).with_value(10.0))
+            .add_state(MockGameState::new(4, PlayerId::Bob).with_value(3.0));
 
-        let state = Rc::new(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2, 3, 4]));
+        let state = MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3, 4]);
 
-        let result = search(&tt, &evaluator, &generator, &state, 1);
+        let result = search(&evaluator, &generator, &state, 1);
 
         assert!(result.is_some());
         let best_move = result.unwrap();
@@ -263,22 +235,20 @@ mod tests {
 
     #[test]
     fn test_search_bob_picks_best_move() {
-        let tt = Rc::new(RefCell::new(TranspositionTable::new(1000)));
-
         let evaluator = MockStaticEvaluator::new()
             .with_value(2, 5.0)
             .with_value(3, 10.0)
             .with_value(4, 3.0);
 
         let generator = MockResponseGenerator::new()
-            .add_state(MockGameState::new(1, PlayerId::BOB as u8).with_children(vec![2, 3, 4]))
-            .add_state(MockGameState::new(2, PlayerId::ALICE as u8).with_value(5.0))
-            .add_state(MockGameState::new(3, PlayerId::ALICE as u8).with_value(10.0))
-            .add_state(MockGameState::new(4, PlayerId::ALICE as u8).with_value(3.0));
+            .add_state(MockGameState::new(1, PlayerId::Bob).with_children(vec![2, 3, 4]))
+            .add_state(MockGameState::new(2, PlayerId::Alice).with_value(5.0))
+            .add_state(MockGameState::new(3, PlayerId::Alice).with_value(10.0))
+            .add_state(MockGameState::new(4, PlayerId::Alice).with_value(3.0));
 
-        let state = Rc::new(MockGameState::new(1, PlayerId::BOB as u8).with_children(vec![2, 3, 4]));
+        let state = MockGameState::new(1, PlayerId::Bob).with_children(vec![2, 3, 4]);
 
-        let result = search(&tt, &evaluator, &generator, &state, 1);
+        let result = search(&evaluator, &generator, &state, 1);
 
         assert!(result.is_some());
         let best_move = result.unwrap();
@@ -287,57 +257,35 @@ mod tests {
 
     #[test]
     fn test_search_respects_max_depth() {
-        let tt = Rc::new(RefCell::new(TranspositionTable::new(1000)));
         let evaluator = MockStaticEvaluator::new().with_value(2, 5.0);
 
         let generator = MockResponseGenerator::new()
-            .add_state(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2]))
-            .add_state(MockGameState::new(2, PlayerId::BOB as u8).with_value(5.0));
+            .add_state(MockGameState::new(1, PlayerId::Alice).with_children(vec![2]))
+            .add_state(MockGameState::new(2, PlayerId::Bob).with_value(5.0));
 
-        let state = Rc::new(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2]));
+        let state = MockGameState::new(1, PlayerId::Alice).with_children(vec![2]);
 
         // Test with depth 0 - should not search deeper
-        let result = search(&tt, &evaluator, &generator, &state, 0);
+        let result = search(&evaluator, &generator, &state, 0);
         assert!(result.is_some());
 
         // Test with depth 1 - should search one level
-        let result = search(&tt, &evaluator, &generator, &state, 1);
+        let result = search(&evaluator, &generator, &state, 1);
         assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_transposition_table_usage() {
-        let tt = Rc::new(RefCell::new(TranspositionTable::new(1000)));
-        let evaluator = MockStaticEvaluator::new().with_value(2, 5.0);
-
-        let generator = MockResponseGenerator::new()
-            .add_state(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2]))
-            .add_state(MockGameState::new(2, PlayerId::BOB as u8).with_value(5.0));
-
-        let state = Rc::new(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2]));
-
-        // First search should populate the transposition table
-        let _result1 = search(&tt, &evaluator, &generator, &state, 2);
-
-        // Verify the transposition table has entries
-        let tt_borrowed = tt.borrow();
-        let entry = tt_borrowed.check(state.fingerprint(), -1);
-        assert!(entry.is_some());
     }
 
     #[test]
     fn test_winning_positions() {
-        let tt = Rc::new(RefCell::new(TranspositionTable::new(1000)));
         let evaluator = MockStaticEvaluator::new();
 
         let generator = MockResponseGenerator::new()
-            .add_state(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2, 3]))
-            .add_state(MockGameState::new(2, PlayerId::BOB as u8).with_value(1000.0)) // Alice wins
-            .add_state(MockGameState::new(3, PlayerId::BOB as u8).with_value(5.0));
+            .add_state(MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]))
+            .add_state(MockGameState::new(2, PlayerId::Bob).with_value(1000.0)) // Alice wins
+            .add_state(MockGameState::new(3, PlayerId::Bob).with_value(5.0));
 
-        let state = Rc::new(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2, 3]));
+        let state = MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]);
 
-        let result = search(&tt, &evaluator, &generator, &state, 1);
+        let result = search(&evaluator, &generator, &state, 1);
 
         assert!(result.is_some());
         let best_move = result.unwrap();
@@ -346,7 +294,6 @@ mod tests {
 
     #[test]
     fn test_alternating_players() {
-        let tt = Rc::new(RefCell::new(TranspositionTable::new(1000)));
         let evaluator = MockStaticEvaluator::new()
             .with_value(2, 8.0)
             .with_value(3, 12.0)
@@ -355,15 +302,15 @@ mod tests {
 
         // Create a tree: Alice -> Bob -> Alice
         let generator = MockResponseGenerator::new()
-            .add_state(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2, 3]))
-            .add_state(MockGameState::new(2, PlayerId::BOB as u8).with_children(vec![4]))
-            .add_state(MockGameState::new(3, PlayerId::BOB as u8).with_children(vec![5]))
-            .add_state(MockGameState::new(4, PlayerId::ALICE as u8).with_value(6.0))
-            .add_state(MockGameState::new(5, PlayerId::ALICE as u8).with_value(15.0));
+            .add_state(MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]))
+            .add_state(MockGameState::new(2, PlayerId::Bob).with_children(vec![4]))
+            .add_state(MockGameState::new(3, PlayerId::Bob).with_children(vec![5]))
+            .add_state(MockGameState::new(4, PlayerId::Alice).with_value(6.0))
+            .add_state(MockGameState::new(5, PlayerId::Alice).with_value(15.0));
 
-        let state = Rc::new(MockGameState::new(1, PlayerId::ALICE as u8).with_children(vec![2, 3]));
+        let state = MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]);
 
-        let result = search(&tt, &evaluator, &generator, &state, 3);
+        let result = search(&evaluator, &generator, &state, 3);
 
         assert!(result.is_some());
         // Alice should choose move 3 because Bob will be forced to allow Alice to reach value 15.0

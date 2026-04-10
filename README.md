@@ -11,7 +11,11 @@ This is a **WORK IN PROGRESS**
 
 ## Overview
 
-The game-player crate implements the basic components of a generic player in a two-person game. It provides:
+The game-player crate provides the core traits and search components needed to build a player for a two-person game. The current
+minimax entry point is `game_player::minimax::search(&evaluator, &response_generator, &state, max_depth)`, which returns the best
+resulting state as `Option<Rc<S>>`.
+
+It provides:
 
 1. A min-max game tree search algorithm using alpha-beta pruning and transposition tables for optimal performance.
 2. A basic Monte Carlo Tree Search algorithm.
@@ -20,17 +24,18 @@ The game-player crate implements the basic components of a generic player in a t
 
 ### Common Core Traits and Types
 
-- **`State` trait**: Abstract representation of game states with fingerprinting
-- **`PlayerId`**: Two players, Alice and Bob, 0 and 1
-- **`StaticEvaluator` trait**: Interface for static position evaluation functions
-- **`TranspositionTable`**: Cache for game state values
+- **`State` trait**: Abstract representation of game states with fingerprinting, turn tracking, terminal detection, and state
+  transitions via `apply`
+- **`PlayerId`**: Two players, Alice and Bob
+- **`StaticEvaluator` trait**: Interface for evaluating a position from Alice's perspective. Has an associated `State` type.
 
 ### Minimax Search
 
-- Complete implementation of min-max search with alpha-beta pruning
-- **`ResponseGenerator` trait**: Trait that generates all possible responses to a state
+- Complete implementation of min-max search with alpha-beta pruning and transposition-table-backed move ordering
+- **`ResponseGenerator` trait**: Trait that generates all possible resulting states from a position.
+- **`search` function**: `search(&evaluator, &response_generator, &state, max_depth) -> Option<S>`
 - Support for configurable search depth
-- Transposition table integration with relevance and value quality enhancements.
+- Internal transposition table integration for cached evaluations.
 - Supports two-player game only
 
 ### Monte Carlo Tree Search
@@ -42,6 +47,98 @@ The game-player crate implements the basic components of a generic player in a t
 - Supports two-player game only
 
 ## Usage
+
+### Basic Minimax Player Implementation
+
+```rust
+use game_player::{PlayerId, State, StaticEvaluator};
+use game_player::minimax::{search, ResponseGenerator};
+
+#[derive(Clone)]
+struct MyAction;
+
+#[derive(Clone)]
+struct MyGameState {
+    current_player: PlayerId,
+    moves_remaining: u8,
+}
+
+impl State for MyGameState {
+    type Action = MyAction;
+
+    fn fingerprint(&self) -> u64 {
+        ((self.current_player as u64) << 8) | self.moves_remaining as u64
+    }
+
+    fn whose_turn(&self) -> PlayerId {
+        self.current_player
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.moves_remaining == 0
+    }
+
+    fn apply(&self, _action: &Self::Action) -> Self {
+        Self {
+            current_player: self.current_player.other(),
+            moves_remaining: self.moves_remaining.saturating_sub(1),
+        }
+    }
+}
+
+struct MyEvaluator;
+
+impl StaticEvaluator for MyEvaluator {
+    type State = MyGameState;
+
+    fn evaluate(&self, state: &MyGameState) -> f32 {
+        if state.is_terminal() {
+            0.0
+        } else if state.whose_turn() == PlayerId::Alice {
+            1.0
+        } else {
+            -1.0
+        }
+    }
+
+    fn alice_wins_value(&self) -> f32 {
+        1000.0
+    }
+
+    fn bob_wins_value(&self) -> f32 {
+        -1000.0
+    }
+}
+
+struct MyResponseGenerator;
+
+impl ResponseGenerator for MyResponseGenerator {
+    type State = MyGameState;
+
+    fn generate(&self, state: &Self::State, _depth: i32) -> Vec<Self::State> {
+        if state.is_terminal() {
+            Vec::new()
+        } else {
+            vec![state.apply(&MyAction)]
+        }
+    }
+}
+
+let initial_state = MyGameState {
+    current_player: PlayerId::Alice,
+    moves_remaining: 4,
+};
+
+let evaluator = MyEvaluator;
+let response_generator = MyResponseGenerator;
+
+let best_state = search(&evaluator, &response_generator, &initial_state, 6);
+
+match best_state {
+    Some(state) => println!("Best resulting state has {} moves remaining", state.moves_remaining),
+    None => println!("No legal responses available"),
+}
+```
 
 ### Basic MCTS Player Implementation
 
@@ -64,65 +161,6 @@ impl Player for MyPlayer {
 
     fn name(&self) -> &str {
         &self.name
-    }
-}
-```
-
-### Basic Minimax Player Implementation
-
-```rust
-use game_player::{Action, GameTree, GameState, StaticEvaluator, TranspositionTable};
-use std::sync::Rc;
-
-// Create components
-let transposition_table = Rc::new(TranspositionTable::new(1000000, 100));
-let static_evaluator = Rc::new(MyEvaluator::new());
-let response_generator = Box::new(|state, depth| {
-    // Generate all possible moves from this state
-    generate_moves(state, depth)
-});
-
-// Create game tree
-let game_tree = GameTree::new(
-    transposition_table,
-    static_evaluator,
-    response_generator,
-    8  // search depth
-);
-
-// Find best move
-let mut current_state = Rc::new(my_game_state);
-game_tree.find_best_response(&mut current_state);
-```
-
-### Custom Game State
-
-```rust
-use game_player::GameState;
-
-struct MyGameState {
-    // Your game state data
-}
-
-impl GameState for MyGameState {
-    fn fingerprint(&self) -> u64 {
-        // Return unique fingerprint for this state
-        todo!()
-    }
-
-    fn whose_turn(&self) -> Self::PlayerId {
-        // Return which player moves next
-        todo!()
-    }
-
-    fn response(&self) -> Option<Rc<dyn GameState>> {
-        // Return the chosen response, if any
-        todo!()
-    }
-
-    fn set_response(&mut self, response: Option<Rc<dyn GameState>>) {
-        // Set the chosen response
-        todo!()
     }
 }
 ```

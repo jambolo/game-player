@@ -6,18 +6,14 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use std::cell::RefCell;
-//! use std::rc::Rc;
 //! use crate::minimax::{search, ResponseGenerator};
-//! use crate::transposition_table::TranspositionTable;
 //!
 //! // Assuming you have implemented the required traits for your game
-//! let tt = Rc::new(RefCell::new(TranspositionTable::new(1000, 100)));
 //! let static_evaluator = MyStaticEvaluator::new();
 //! let response_generator = MyResponseGenerator::new();
-//! let initial_state = Rc::new(MyGameState::new());
+//! let initial_state = MyGameState::new();
 //!
-//! if let Some(best_move) = search(&tt, &static_evaluator, &response_generator, &initial_state, 6) {
+//! if let Some(best_move) = search(&static_evaluator, &response_generator, &initial_state, 6) {
 //!     println!("Best move found: {:?}", best_move);
 //! }
 //! ```
@@ -33,7 +29,7 @@ use crate::state::*;
 use crate::static_evaluator::*;
 use crate::transposition_table::*;
 
-static SEF_QUALITY: i16 = 0; // Quality of a value returned by the static evaluation function.
+static SEF_QUALITY: u32 = 0; // Quality of a value returned by the static evaluation function.
 
 // Holds evaluation information about a response.
 struct Response<S> {
@@ -42,19 +38,18 @@ struct Response<S> {
     // Value of the state
     value: f32,
     // Quality of the value. Quality is the number of plies searched to find the value.
-    quality: i16,
+    quality: u32,
 }
 
 // Holds static information pertaining to the search.
-struct Context<'a, S, E: StaticEvaluator<S>, R: ResponseGenerator<State = S>>
+struct Context<'a, S, E: StaticEvaluator<State = S>, R: ResponseGenerator<State = S>>
 where
     S: State,
 {
-    max_depth: i32,
+    max_depth: u32,
     rg: &'a R,
     sef: &'a E,
-    tt: &'a Rc<RefCell<TranspositionTable>>,
-    _phantom: std::marker::PhantomData<S>,
+    tt: RefCell<TranspositionTable>,
 }
 /// Response generator function object trait.
 ///
@@ -71,14 +66,14 @@ where
 /// impl ResponseGenerator for MyResponseGenerator {
 ///     type State = MyGameState;
 ///
-///     fn generate(&self, state: &Rc<Self::State>, depth: i32) -> Vec<Box<Self::State>> {
+///     fn generate(&self, state: &Self::State, depth: u32) -> Vec<Self::State> {
 ///         // Generate all valid moves for the current player
 ///         let mut responses = Vec::new();
 ///
 ///         // Game-specific logic to generate moves
 ///         for possible_move in get_all_valid_moves(state) {
 ///             let new_state = state.apply_move(possible_move);
-///             responses.push(Box::new(new_state));
+///             responses.push(new_state);
 ///         }
 ///
 ///         responses
@@ -104,12 +99,12 @@ pub trait ResponseGenerator {
     /// * `depth` - Current search depth (ply number), useful for optimizations
     ///
     /// # Returns
-    /// A vector of boxed game states representing all possible moves, or an empty vector if no moves are available.
+    /// A vector of game states representing all possible moves, or an empty vector if no moves are available.
     ///
     /// # Examples
     /// ```rust,ignore
     /// let response_gen = MyResponseGenerator::new();
-    /// let current_state = Rc::new(MyGameState::new());
+    /// let current_state = MyGameState::new();
     ///
     /// let possible_moves = response_gen.generate(&current_state, 0);
     /// println!("Found {} possible moves", possible_moves.len());
@@ -121,7 +116,7 @@ pub trait ResponseGenerator {
     /// # Note
     /// Returning no responses indicates that the player cannot respond. It does not necessarily indicate that the game is over or
     /// that the player has passed. If passing is allowed, then a "pass" state should be a valid response.
-    fn generate(&self, state: &Rc<Self::State>, depth: i32) -> Vec<Box<Self::State>>;
+    fn generate(&self, state: &Self::State, depth: u32) -> Vec<Self::State>;
 }
 
 /// A minimax search implementation using alpha-beta pruning and a transposition table.
@@ -143,24 +138,20 @@ pub trait ResponseGenerator {
 /// * `max_depth` - Maximum search depth in plies
 ///
 /// # Returns
-/// `Some(Rc<S>)` containing the best move found, or `None` if no valid moves exist
+/// `Some(S)` containing the best resulting state found, or `None` if no valid moves exist
 ///
 /// # Examples
 ///
 /// ```rust,ignore
-/// use std::cell::RefCell;
-/// use std::rc::Rc;
 /// use crate::minimax::search;
-/// use crate::transposition_table::TranspositionTable;
 ///
 /// // Set up the search components
-/// let transposition_table = Rc::new(RefCell::new(TranspositionTable::new(1000, 100)));
 /// let evaluator = MyStaticEvaluator::new();
 /// let move_generator = MyResponseGenerator::new();
-/// let game_state = Rc::new(MyGameState::initial_position());
+/// let game_state = MyGameState::initial_position();
 ///
 /// // Search to depth 6
-/// match search(&transposition_table, &evaluator, &move_generator, &game_state, 6) {
+/// match search(&evaluator, &move_generator, &game_state, 6) {
 ///     Some(best_move) => println!("Best move: {:?}", best_move),
 ///     None => println!("No moves available"),
 /// }
@@ -173,26 +164,22 @@ pub trait ResponseGenerator {
 /// - **Alpha-beta pruning**: Early termination of unpromising branches
 /// - **Transposition table**: Caching of previously evaluated positions
 /// - **Move ordering**: Better moves searched first for more effective pruning
-pub fn search<S, E, R>(tt: &Rc<RefCell<TranspositionTable>>, sef: &E, rg: &R, s0: &Rc<S>, max_depth: i32) -> Option<Rc<S>>
+pub fn search<S, E, R>(sef: &E, rg: &R, s0: &S, max_depth: u32) -> Option<S>
 where
     S: State,
-    E: StaticEvaluator<S>,
+    E: StaticEvaluator<State = S>,
     R: ResponseGenerator<State = S>,
 {
     let context = Context {
-        tt,
+        tt: RefCell::new(TranspositionTable::new(0)),
         sef,
         rg,
         max_depth,
-        _phantom: std::marker::PhantomData,
     };
-    let player = if s0.whose_turn() == PlayerId::ALICE as u8 {
-        PlayerId::ALICE
-    } else {
-        PlayerId::BOB
-    };
-    if let Some(response) = search_recursive(&context, s0, -f32::INFINITY, f32::INFINITY, 1, player) {
-        return Some(Rc::clone(&response.state));
+    let player = s0.whose_turn();
+    let rc_s0 = Rc::new(s0.clone());
+    if let Some(response) = search_recursive(&context, &rc_s0, -f32::INFINITY, f32::INFINITY, 1, player) {
+        return Some(Rc::try_unwrap(response.state).unwrap_or_else(|rc| (*rc).clone()));
     }
     None
 }
@@ -204,18 +191,18 @@ fn search_recursive<S, E, R>(
     state: &Rc<S>,
     mut alpha: f32,
     mut beta: f32,
-    depth: i32,
+    depth: u32,
     player: PlayerId,
 ) -> Option<Response<S>>
 where
     S: State,
-    E: StaticEvaluator<S>,
+    E: StaticEvaluator<State = S>,
     R: ResponseGenerator<State = S>,
 {
-    let maximizing = player == PlayerId::ALICE;
+    let maximizing = player == PlayerId::Alice;
 
     // Quality of the value of the returned response
-    let this_quality = (context.max_depth - depth) as i16;
+    let this_quality = context.max_depth.saturating_sub(depth);
 
     // Generate a list of the possible responses to this state. The responses are initialized with preliminary values.
     let mut responses = generate_responses(context, state, depth);
@@ -228,15 +215,15 @@ where
     // Sort to increase the chance of pruning earlier. For a maximizing player, sort highest to lowest to hit beta cutoffs earlier.
     // For a minimizing player, sort lowest to highest to hit alpha cutoffs earlier.
     if maximizing {
-        responses.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
+        responses.sort_by(|a, b| b.value.total_cmp(&a.value));
     } else {
-        responses.sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap_or(std::cmp::Ordering::Equal));
+        responses.sort_by(|a, b| a.value.total_cmp(&b.value));
     }
 
     // Evaluate each of the responses and choose the one with the best value for this player.
     let mut best_state: Option<&Rc<S>> = None;
     let mut best_value = if maximizing { -f32::INFINITY } else { f32::INFINITY };
-    let mut best_quality = -1;
+    let mut best_quality: u32 = 0;
     let mut pruned = false;
 
     let wins_value = if maximizing {
@@ -257,9 +244,9 @@ where
         //    from the result of a previous search stored in the transposition table.
         // 3. The search has reached its maximum depth.
         let preliminary_is_not_a_winner = if maximizing {
-            response.value < wins_value
+            response.value.total_cmp(&wins_value).is_lt()
         } else {
-            value > wins_value
+            value.total_cmp(&wins_value).is_gt()
         };
 
         if preliminary_is_not_a_winner && depth < context.max_depth && response.quality < this_quality {
@@ -272,7 +259,7 @@ where
         }
 
         // Determine if this response's value is the best so far. If so, then save the value and do alpha-beta pruning.
-        let is_better = if maximizing { value > best_value } else { value < best_value };
+        let is_better = if maximizing { value.total_cmp(&best_value).is_gt() } else { value.total_cmp(&best_value).is_lt() };
 
         if is_better {
             // Save it
@@ -282,9 +269,9 @@ where
 
             // If this player wins with this response, then there is no reason to look for anything better.
             let is_winner = if maximizing {
-                best_value >= wins_value
+                best_value.total_cmp(&wins_value).is_ge()
             } else {
-                best_value <= wins_value
+                best_value.total_cmp(&wins_value).is_le()
             };
 
             if is_winner {
@@ -294,22 +281,22 @@ where
             // alpha-beta pruning: cutoff and bound update logic
             if maximizing {
                 // Beta cutoff: if best value exceeds beta, the opponent will not allow this line.
-                if best_value > beta {
+                if best_value.total_cmp(&beta).is_gt() {
                     pruned = true;
                     break;
                 }
                 // Update alpha: this is the best value found so far for the maximizing player.
-                if best_value > alpha {
+                if best_value.total_cmp(&alpha).is_gt() {
                     alpha = best_value;
                 }
             } else {
                 // Alpha cutoff: if best value is below alpha, the opponent will not allow this line.
-                if best_value < alpha {
+                if best_value.total_cmp(&alpha).is_lt() {
                     pruned = true;
                     break;
                 }
                 // Update beta: this is the best value found so far for the minimizing player.
-                if best_value < beta {
+                if best_value.total_cmp(&beta).is_lt() {
                     beta = best_value;
                 }
             }
@@ -317,12 +304,11 @@ where
     }
 
     let bound_check = if maximizing {
-        best_value > -f32::INFINITY
+        best_value.total_cmp(&-f32::INFINITY).is_gt()
     } else {
-        best_value < f32::INFINITY
+        best_value.total_cmp(&f32::INFINITY).is_lt()
     };
     assert!(bound_check); // Sanity check
-    assert!(best_quality >= 0); // Sanity check
     assert!(best_state.is_some()); // Sanity check
 
     // Just in case a best case was never found, return None.
@@ -336,7 +322,7 @@ where
         context
             .tt
             .borrow_mut()
-            .update(state.fingerprint(), (best_value, best_quality + 1));
+            .update(state.fingerprint(), best_value, best_quality + 1);
     }
 
     Some(Response::<S> {
@@ -347,14 +333,14 @@ where
 }
 
 // Generates a list of responses to the given node.
-fn generate_responses<S, E, R>(context: &Context<S, E, R>, state: &Rc<S>, depth: i32) -> Vec<Response<S>>
+fn generate_responses<S, E, R>(context: &Context<S, E, R>, state: &Rc<S>, depth: u32) -> Vec<Response<S>>
 where
     S: State,
-    E: StaticEvaluator<S>,
+    E: StaticEvaluator<State = S>,
     R: ResponseGenerator<State = S>,
 {
     // Handle the case where node.state might be None.
-    let responses = context.rg.generate(state, depth);
+    let responses = context.rg.generate(state.as_ref(), depth);
     responses
         .into_iter()
         .map(|state| {
@@ -370,10 +356,10 @@ where
 }
 
 // Get a preliminary value of the state from the static evaluator or the transposition table.
-fn get_preliminary_value<S, E, R>(context: &Context<S, E, R>, state: &Rc<S>) -> (f32, i16)
+fn get_preliminary_value<S, E, R>(context: &Context<S, E, R>, state: &Rc<S>) -> (f32, u32)
 where
     S: State,
-    E: StaticEvaluator<S>,
+    E: StaticEvaluator<State = S>,
     R: ResponseGenerator<State = S>,
 {
     // SEF optimization: Since any value of any state in the T-table has already been computed by search and/or SEF, it has a
@@ -383,13 +369,14 @@ where
     let fingerprint = state.fingerprint();
 
     // First, check if the value is in the transposition table (don't care about quality).
-    if let Some(cached_value) = context.tt.borrow().check(fingerprint, -1) {
+    let mut tt = context.tt.borrow_mut();
+    if let Some(cached_value) = tt.check(fingerprint) {
         return cached_value;
     }
 
     // Value not in table, so evaluate with static evaluator and store result.
-    let entry = (context.sef.evaluate(state), SEF_QUALITY);
-    context.tt.borrow_mut().update(fingerprint, entry);
+    let value = context.sef.evaluate(state);
+    tt.update(fingerprint, value, SEF_QUALITY);
 
-    entry
+    (value, SEF_QUALITY)
 }

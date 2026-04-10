@@ -10,7 +10,10 @@
 /// The values returned by the static evaluation function should be in the range [bob_wins_value(), alice_wins_value()]. If the game
 /// is over and Alice has won, then the function should return alice_wins_value(). If the game is over and Bob has won, then the
 /// function should return bob_wins_value().
-pub trait StaticEvaluator<G> {
+pub trait StaticEvaluator {
+    /// The type representing game states that this evaluator works with
+    type State;
+
     /// Evaluates the given state and returns its value from Alice's perspective.
     ///
     /// # Arguments
@@ -21,7 +24,7 @@ pub trait StaticEvaluator<G> {
     ///
     /// # Note
     /// This function must be implemented.
-    fn evaluate(&self, state: &G) -> f32;
+    fn evaluate(&self, state: &Self::State) -> f32;
 
     /// Returns the value that indicates that Alice has won.
     ///
