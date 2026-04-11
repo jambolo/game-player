@@ -32,13 +32,13 @@ This crate provides components for implementing AI players in two-person games. 
 
 - **`State`** ([src/state.rs](src/state.rs)) - Game state interface with associated `Action` type. Requires `fingerprint()` for transposition table hashing, `whose_turn()`, `is_terminal()`, and `apply(action)`.
 
-- **`StaticEvaluator<S>`** ([src/static_evaluator.rs](src/static_evaluator.rs)) - Position evaluation. **Always from Alice's perspective**, regardless of whose turn it is: higher = better for Alice, lower = better for Bob. Values must lie in `[bob_wins_value(), alice_wins_value()]`. This invariant is load-bearing for the search's max/min logic — do not "flip the sign for Bob's turn" in an evaluator.
+- **`StaticEvaluator<S>`** ([src/static_evaluator.rs](src/static_evaluator.rs)) - Position evaluation. **Invariant: must always return values from Alice's perspective**, regardless of whose turn it is. Higher = better for Alice, lower = better for Bob. Values must lie in `[bob_wins_value(), alice_wins_value()]`. The search's max/min logic ([minimax.rs:215-217](src/minimax.rs#L215)) depends on this invariant — if you violate it by returning current-player-perspective values, the search will pick wrong moves.
 
-- **`ResponseGenerator`** ([src/minimax.rs:88](src/minimax.rs#L88)) - Generates all legal moves from a state. Signature: `fn generate(&self, state: &Self::State, depth: u32) -> Vec<Self::State>`. Returns plain owned states, not boxed or `Rc`-wrapped.
+- **`ResponseGenerator`** ([src/minimax.rs:86](src/minimax.rs#L86)) - Generates all legal actions from a state. Signature: `fn generate(&self, state: &Self::State, depth: u32) -> Vec<<Self::State as State>::Action>`. The search calls `state.apply(&action)` on each returned action internally.
 
 ### Search Implementation
 
-- **`minimax::search()`** ([src/minimax.rs:167](src/minimax.rs#L167)) - Main entry point. Performs alpha-beta pruned minimax with transposition table integration. Returns `Option<S>` with the best resulting state (the internal `Rc` is unwrapped before returning).
+- **`minimax::search()`** ([src/minimax.rs:172](src/minimax.rs#L172)) - Main entry point. Performs alpha-beta pruned minimax with transposition table integration. Returns `Option<S::Action>` — the best action to take. Callers who need the resulting state call `s0.apply(&action)`.
 
 - **`TranspositionTable`** ([src/transposition_table.rs](src/transposition_table.rs)) - Cache for state values and quality, keyed by fingerprint. HashMap-backed with quality-based replacement.
 
@@ -46,13 +46,13 @@ This crate provides components for implementing AI players in two-person games. 
 
 The search tracks a "quality" value alongside each cached evaluation. Quality is the number of plies searched *below* the node to produce that value:
 
-- A raw static-evaluator result has quality `0` (`SEF_QUALITY` at [src/minimax.rs:32](src/minimax.rs#L32)).
+- A raw static-evaluator result has quality `0` (`SEF_QUALITY` at [src/minimax.rs:33](src/minimax.rs#L33)).
 - A node fully searched to `max_depth` has the highest quality.
-- When looking up a TT entry, the cached value is only reused in place of recursion if its quality meets or exceeds what the current search would need ([src/minimax.rs:252](src/minimax.rs#L252)). Otherwise the cached value is used as a preliminary estimate and the search recurses anyway.
+- When looking up a TT entry, the cached value is only reused in place of recursion if its quality meets or exceeds what the current search would need ([src/minimax.rs:261](src/minimax.rs#L261)). Otherwise the cached value is used as a preliminary estimate and the search recurses anyway.
 
 ### Alpha-Beta Pruning and the TT (Important)
 
-When a branch is cut off by alpha-beta pruning, the resulting `best_value` is only a bound, not an exact value. The search deliberately **does not** store pruned results in the transposition table ([src/minimax.rs:321-326](src/minimax.rs#L321-L326)). Do not "optimize" this by always writing to the TT — it would poison the cache with incorrect values.
+When a branch is cut off by alpha-beta pruning, the resulting `best_value` is only a bound, not an exact value. The search deliberately **does not** store pruned results in the transposition table ([src/minimax.rs:320-325](src/minimax.rs#L320-L325)). Do not "optimize" this by always writing to the TT — it would poison the cache with incorrect values.
 
 ### Player Convention
 

@@ -9,10 +9,11 @@ use game_player::minimax::{ResponseGenerator, search};
 use game_player::state::{PlayerId, State};
 use game_player::static_evaluator::StaticEvaluator;
 
-/// Mock action type for testing
+/// Mock action type for testing. `id` matches the target state's id for easy assertion.
 #[derive(Debug, Clone, PartialEq)]
 struct MockAction {
     id: u32,
+    target_state: MockGameState,
 }
 
 /// Mock game state for testing minimax
@@ -60,10 +61,8 @@ impl State for MockGameState {
         self.children.is_empty() && self.value.is_some()
     }
 
-    fn apply(&self, _action: &MockAction) -> Self {
-        // For testing purposes, we don't need a real implementation
-        // since the mock response generator handles state transitions
-        self.clone()
+    fn apply(&self, action: &MockAction) -> Self {
+        action.target_state.clone()
     }
 }
 
@@ -119,11 +118,16 @@ impl MockResponseGenerator {
 
 impl ResponseGenerator for MockResponseGenerator {
     type State = MockGameState;
-    fn generate(&self, state: &MockGameState, _depth: u32) -> Vec<MockGameState> {
+    fn generate(&self, state: &MockGameState, _depth: u32) -> Vec<MockAction> {
         state
             .children
             .iter()
-            .filter_map(|&child_id| self.states.get(&child_id).cloned())
+            .filter_map(|&child_id| {
+                self.states.get(&child_id).map(|child| MockAction {
+                    id: child_id,
+                    target_state: child.clone(),
+                })
+            })
             .collect()
     }
 }
@@ -317,5 +321,155 @@ mod tests {
         // whereas move 2 only leads to value 6.0
         let best_move = result.unwrap();
         assert_eq!(best_move.id, 3);
+    }
+
+    /// The greedy (depth-1) choice and the full minimax choice disagree.
+    ///
+    /// Tree:
+    ///   Alice(1) → Bob(2) [SEF=10], Bob(3) [SEF=7]
+    ///   Bob(2)   → Alice(4) [val=1], Alice(5) [val=2]   Bob picks min=1
+    ///   Bob(3)   → Alice(6) [val=8], Alice(7) [val=6]   Bob picks min=6
+    ///
+    /// Depth-1: Alice sees 10 > 7, picks state 2.
+    /// Full minimax: Alice sees max(1, 6) = 6, picks state 3.
+    #[test]
+    fn test_minimax_overrides_greedy_choice() {
+        let evaluator = MockStaticEvaluator::new()
+            .with_value(2, 10.0)
+            .with_value(3, 7.0)
+            .with_value(4, 1.0)
+            .with_value(5, 2.0)
+            .with_value(6, 8.0)
+            .with_value(7, 6.0);
+
+        let generator = MockResponseGenerator::new()
+            .add_state(MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]))
+            .add_state(MockGameState::new(2, PlayerId::Bob).with_children(vec![4, 5]))
+            .add_state(MockGameState::new(3, PlayerId::Bob).with_children(vec![6, 7]))
+            .add_state(MockGameState::new(4, PlayerId::Alice).with_value(1.0))
+            .add_state(MockGameState::new(5, PlayerId::Alice).with_value(2.0))
+            .add_state(MockGameState::new(6, PlayerId::Alice).with_value(8.0))
+            .add_state(MockGameState::new(7, PlayerId::Alice).with_value(6.0));
+
+        let state = MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]);
+
+        // Shallow search is misled by the SEF and picks state 2 (value 10 > 7).
+        let shallow = search(&evaluator, &generator, &state, 1);
+        assert!(shallow.is_some());
+        assert_eq!(shallow.unwrap().id, 2);
+
+        // Full minimax correctly identifies state 3: Bob counters state 2 down to 1,
+        // but can only hold state 3 to 6. Alice prefers 6 over 1.
+        let deep = search(&evaluator, &generator, &state, 3);
+        assert!(deep.is_some());
+        assert_eq!(deep.unwrap().id, 3);
+    }
+
+    /// Alice avoids a move that lets Bob win, even though it looks good on the surface.
+    ///
+    /// Tree:
+    ///   Alice(1) → Bob(2) [SEF=5], Bob(3) [SEF=3]
+    ///   Bob(2)   → Alice(4) [val=-1000]   Bob wins
+    ///   Bob(3)   → Alice(5) [val=5]
+    ///
+    /// Alice should pick state 3, not state 2.
+    #[test]
+    fn test_avoids_move_leading_to_bob_win() {
+        let evaluator = MockStaticEvaluator::new().with_value(2, 5.0).with_value(3, 3.0);
+
+        let generator = MockResponseGenerator::new()
+            .add_state(MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]))
+            .add_state(MockGameState::new(2, PlayerId::Bob).with_children(vec![4]))
+            .add_state(MockGameState::new(3, PlayerId::Bob).with_children(vec![5]))
+            .add_state(MockGameState::new(4, PlayerId::Alice).with_value(-1000.0))
+            .add_state(MockGameState::new(5, PlayerId::Alice).with_value(5.0));
+
+        let state = MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]);
+
+        let result = search(&evaluator, &generator, &state, 3);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().id, 3);
+    }
+
+    /// Bob seizes an immediately winning move.
+    #[test]
+    fn test_bob_picks_winning_move() {
+        let evaluator = MockStaticEvaluator::new().with_value(2, 5.0);
+
+        let generator = MockResponseGenerator::new()
+            .add_state(MockGameState::new(1, PlayerId::Bob).with_children(vec![2, 3]))
+            .add_state(MockGameState::new(2, PlayerId::Alice).with_value(5.0))
+            .add_state(MockGameState::new(3, PlayerId::Alice).with_value(-1000.0)); // Bob wins
+
+        let state = MockGameState::new(1, PlayerId::Bob).with_children(vec![2, 3]);
+
+        let result = search(&evaluator, &generator, &state, 1);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().id, 3);
+    }
+
+    /// The same leaf state is reachable from two different parents (diamond-shaped tree).
+    /// The transposition table should cache state 4's value after the first visit and
+    /// prevent a redundant recursive evaluation on the second visit.
+    ///
+    /// Tree:
+    ///   Alice(1) → Bob(2), Bob(3)
+    ///   Bob(2)   → Alice(4) [val=7]
+    ///   Bob(3)   → Alice(4) [same fingerprint]
+    #[test]
+    fn test_transposition_table_shared_state() {
+        let evaluator = MockStaticEvaluator::new().with_value(2, 6.0).with_value(3, 6.0);
+        let shared_leaf = MockGameState::new(4, PlayerId::Alice).with_value(7.0);
+
+        let generator = MockResponseGenerator::new()
+            .add_state(MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]))
+            .add_state(MockGameState::new(2, PlayerId::Bob).with_children(vec![4]))
+            .add_state(MockGameState::new(3, PlayerId::Bob).with_children(vec![4]))
+            .add_state(shared_leaf);
+
+        let state = MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]);
+
+        // Both paths lead to value 7.0; the search must complete correctly.
+        let result = search(&evaluator, &generator, &state, 3);
+        assert!(result.is_some());
+        let action = result.unwrap();
+        assert!(action.id == 2 || action.id == 3);
+    }
+
+    /// Alpha-beta pruning fires but the returned move is still the correct minimax choice.
+    ///
+    /// Tree:
+    ///   Alice(1) → Bob(2), Bob(3)       (sorted: Bob(2) SEF=8 first)
+    ///   Bob(2)   → Alice(4)=8, Alice(5)=3   Bob picks min=3; Alice sets alpha=3
+    ///   Bob(3)   → Alice(6)=1, Alice(7)=10  Bob evaluates 1 < alpha=3 → alpha cutoff
+    ///
+    /// Correct result: max(3, 1) = 3 → Alice picks state 2.
+    /// State 7 must never influence the result (it is pruned).
+    #[test]
+    fn test_alpha_beta_pruning_correctness() {
+        let evaluator = MockStaticEvaluator::new()
+            .with_value(2, 8.0)
+            .with_value(3, 6.0)
+            .with_value(4, 8.0)
+            .with_value(5, 3.0)
+            .with_value(6, 1.0)
+            .with_value(7, 10.0);
+
+        let generator = MockResponseGenerator::new()
+            .add_state(MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]))
+            .add_state(MockGameState::new(2, PlayerId::Bob).with_children(vec![4, 5]))
+            .add_state(MockGameState::new(3, PlayerId::Bob).with_children(vec![6, 7]))
+            .add_state(MockGameState::new(4, PlayerId::Alice).with_value(8.0))
+            .add_state(MockGameState::new(5, PlayerId::Alice).with_value(3.0))
+            .add_state(MockGameState::new(6, PlayerId::Alice).with_value(1.0))
+            .add_state(MockGameState::new(7, PlayerId::Alice).with_value(10.0));
+
+        let state = MockGameState::new(1, PlayerId::Alice).with_children(vec![2, 3]);
+
+        // Bob(2) → min(8,3)=3; Bob(3) → alpha cutoff after seeing 1 < alpha=3
+        // Alice: max(3, 1) = 3 → state 2
+        let result = search(&evaluator, &generator, &state, 3);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().id, 2);
     }
 }

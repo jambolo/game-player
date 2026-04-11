@@ -4,21 +4,15 @@ This crate provides the base components for implementing a player in a two-perso
 
 This is a **WORK IN PROGRESS**
 
-| Branch    | Workflow Status | Coverage |
-|-----------|-----------------|----------|
-| `master`  | ![Release](https://github.com/jambolo/game-player/actions/workflows/release.yml/badge.svg?branch=master) | N/A |
-| `develop` | ![Rust](https://github.com/jambolo/game-player/actions/workflows/rust.yml/badge.svg?branch=develop) | [![codecov](https://codecov.io/gh/jambolo/game-player/branch/develop/graph/badge.svg)](https://codecov.io/gh/jambolo/game-player) |
+`develop` branch: ![Rust](https://github.com/jambolo/game-player/actions/workflows/rust.yml/badge.svg?branch=develop) [![codecov](https://codecov.io/gh/jambolo/game-player/branch/develop/graph/badge.svg)](https://codecov.io/gh/jambolo/game-player)
 
 ## Overview
 
-The game-player crate provides the core traits and search components needed to build a player for a two-person game. The current
-minimax entry point is `game_player::minimax::search(&evaluator, &response_generator, &state, max_depth)`, which returns the best
-resulting state as `Option<Rc<S>>`.
+The game-player crate provides the core traits and search components needed to build a player for a two-person game.
 
 It provides:
 
 1. A min-max game tree search algorithm using alpha-beta pruning and transposition tables for optimal performance.
-2. A basic Monte Carlo Tree Search algorithm.
 
 ## Components
 
@@ -31,19 +25,11 @@ It provides:
 
 ### Minimax Search
 
-- Complete implementation of min-max search with alpha-beta pruning and transposition-table-backed move ordering
-- **`ResponseGenerator` trait**: Trait that generates all possible resulting states from a position.
-- **`search` function**: `search(&evaluator, &response_generator, &state, max_depth) -> Option<S>`
+- Complete implementation of min-max search with alpha-beta pruning and transposition-table optimizations.
+- **`ResponseGenerator` trait**: Trait that generates all possible actions from a state.
+- **`search` function**: `search(&evaluator, &response_generator, &state, max_depth) -> Option<S::Action>`
 - Support for configurable search depth
 - Internal transposition table integration for cached evaluations.
-- Supports two-player game only
-
-### Monte Carlo Tree Search
-
-- **`MonteCarloTreeSearch`**: Monte Carlo Tree Search implementation with UCT-based node selection.
-- **`ResponseGenerator` trait**: Trait that generates all possible actions from a state
-- Configurable iteration count
-- Configurable exploration constant
 - Supports two-player game only
 
 ## Usage
@@ -54,8 +40,10 @@ It provides:
 use game_player::{PlayerId, State, StaticEvaluator};
 use game_player::minimax::{search, ResponseGenerator};
 
-#[derive(Clone)]
-struct MyAction;
+#[derive(Clone, Debug)]
+struct MyAction {
+    // game-specific move data
+}
 
 #[derive(Clone)]
 struct MyGameState {
@@ -91,14 +79,10 @@ struct MyEvaluator;
 impl StaticEvaluator for MyEvaluator {
     type State = MyGameState;
 
+    // Always evaluated from Alice's perspective: higher is better for Alice,
+    // lower is better for Bob. Never flip the sign based on whose turn it is.
     fn evaluate(&self, state: &MyGameState) -> f32 {
-        if state.is_terminal() {
-            0.0
-        } else if state.whose_turn() == PlayerId::Alice {
-            1.0
-        } else {
-            -1.0
-        }
+        state.moves_remaining as f32
     }
 
     fn alice_wins_value(&self) -> f32 {
@@ -115,11 +99,11 @@ struct MyResponseGenerator;
 impl ResponseGenerator for MyResponseGenerator {
     type State = MyGameState;
 
-    fn generate(&self, state: &Self::State, _depth: i32) -> Vec<Self::State> {
+    fn generate(&self, state: &Self::State, _depth: u32) -> Vec<MyAction> {
         if state.is_terminal() {
             Vec::new()
         } else {
-            vec![state.apply(&MyAction)]
+            vec![MyAction { /* ... */ }]
         }
     }
 }
@@ -132,39 +116,17 @@ let initial_state = MyGameState {
 let evaluator = MyEvaluator;
 let response_generator = MyResponseGenerator;
 
-let best_state = search(&evaluator, &response_generator, &initial_state, 6);
-
-match best_state {
-    Some(state) => println!("Best resulting state has {} moves remaining", state.moves_remaining),
+match search(&evaluator, &response_generator, &initial_state, 6) {
+    Some(action) => {
+        let next_state = initial_state.apply(&action);
+        println!("Best resulting state has {} moves remaining", next_state.moves_remaining);
+    }
     None => println!("No legal responses available"),
-}
-```
-
-### Basic MCTS Player Implementation
-
-```rust
-use game_player::{Player, GameState, Action};
-
-struct MyPlayer {
-    name: String,
-}
-
-impl Player for MyPlayer {
-    fn setup(&mut self, game_state: &mut DominoesGameState) {
-        // Initialize player's hand from the boneyard
-    }
-
-    fn my_turn(&mut self, game_state: &DominoesGameState) -> (Action, DominoesGameState) {
-        // Implement your turn logic here
-        todo!("Implement turn logic")
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
 }
 ```
 
 ## Features
 
 ## Future Development
+
+- Monte Carlo Tree Search (MCTS) with UCT-based node selection

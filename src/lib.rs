@@ -85,8 +85,8 @@
 //!         if state.is_game_over() {
 //!             return 0.0; // Draw
 //!         }
-//!         // Simple evaluation: favor the player with more "material" (simplified)
-//!         (state.board.count_ones() as f32 - 16.0) * if state.current_player { 1.0 } else { -1.0 }
+//!         // Always from Alice's perspective: material advantage relative to baseline
+//!         state.board.count_ones() as f32 - 16.0
 //!     }
 //!
 //!     fn alice_wins_value(&self) -> f32 { 1000.0 }
@@ -99,29 +99,26 @@
 //! impl ResponseGenerator for GameMoveGenerator {
 //!     type State = GameState;
 //!
-//!     fn generate(&self, state: &Self::State, _depth: u32) -> Vec<Self::State> {
+//!     fn generate(&self, state: &Self::State, _depth: u32) -> Vec<GameMove> {
 //!         state.get_possible_moves()
-//!             .into_iter()
-//!             .map(|game_move| state.apply(&game_move))
-//!             .collect()
 //!     }
 //! }
 //!
 //! // 4. Use the minimax search to find the best move
-//! fn find_best_move() -> Option<GameState> {
+//! fn find_best_move() -> Option<GameMove> {
 //!     // Set up the game components
 //!     let initial_state = GameState::new();
 //!     let evaluator = GameEvaluator;
 //!     let move_generator = GameMoveGenerator;
 //!
-//!     // Perform minimax search to find best move
+//!     // Perform minimax search to find best action
 //!     search(&evaluator, &move_generator, &initial_state, 6)
 //! }
 //!
 //! // Usage: Create an AI that can play your game
 //! let best_move = find_best_move();
 //! match best_move {
-//!     Some(new_state) => println!("AI found best move, new state: {:?}", new_state),
+//!     Some(action) => println!("AI found best move: {:?}", action),
 //!     None => println!("No moves available"),
 //! }
 //! ```
