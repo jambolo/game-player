@@ -97,8 +97,8 @@ pub trait ResponseGenerator {
     /// * `depth` - Current search depth (ply number), useful for optimizations
     ///
     /// # Returns
-    /// A vector of actions representing all possible moves, or an empty vector if no moves are available.
-    /// The search will call `state.apply(&action)` on each returned action to obtain the resulting state.
+    /// A vector of actions representing all possible moves, or an empty vector if no moves are available. The search will call
+    /// `state.apply(&action)` on each returned action to obtain the resulting state.
     ///
     /// # Examples
     /// ```rust,ignore
@@ -110,15 +110,15 @@ pub trait ResponseGenerator {
     /// ```
     ///
     /// # Notes
-    /// - If passing or resigning is allowed in the game, then the implementer should include a "pass" or "resign" action
-    ///   as a valid response when appropriate.
+    /// - If passing or resigning is allowed in the game, then the implementer should include a "pass" or "resign" action as a valid
+    ///   response when appropriate.
     /// - Returning no actions indicates that the player cannot respond. It does not necessarily indicate that the game is over or
     ///   that the player has passed. If no actions are returned, the value of the given state is set by the static evaluation
     ///   function.
-    /// - If a player has no valid moves and that forces a pass, then the returned actions should include a "pass" action instead
-    ///   of returning no actions. If a player has no valid moves and that forces a resignation, then the returned actions can
-    ///   include a "resign" action instead of returning no actions, or it can return no actions and then the static evaluation
-    ///   function must detect the resignation condition and assign the opponent's win value to the given state.
+    /// - If a player has no valid moves and that forces a pass, then the returned actions should include a "pass" action instead of
+    ///   returning no actions. If a player has no valid moves and that forces a resignation, then the returned actions can include
+    ///   a "resign" action instead of returning no actions, or it can return no actions and then the static evaluation function
+    ///   must detect the resignation condition and assign the opponent's win value to the given state.
     fn generate(&self, state: &Self::State, depth: u32) -> Vec<<Self::State as State>::Action>;
 }
 
@@ -139,8 +139,8 @@ pub trait ResponseGenerator {
 /// * `max_depth` - Maximum search depth in plies
 ///
 /// # Returns
-/// `Some(S::Action)` containing the best action to take, or `None` if no valid moves exist.
-/// Callers who need the resulting state can derive it with `s0.apply(&action)`.
+/// `Some(S::Action)` containing the best action to take, or `None` if no valid moves exist. Callers who need the resulting state
+/// can derive it with `s0.apply(&action)`.
 ///
 /// # Examples
 ///
@@ -183,8 +183,7 @@ where
     };
     let player = s0.whose_turn();
     let rc_s0 = Rc::new(s0.clone());
-    search_recursive(&context, &rc_s0, -f32::INFINITY, f32::INFINITY, 1, player)
-        .map(|response| response.action)
+    search_recursive(&context, &rc_s0, -f32::INFINITY, f32::INFINITY, 1, player).map(|response| response.action)
 }
 
 // Evaluates all of the current player's possible responses to the given state. The returned response is the one with the best value
@@ -213,12 +212,20 @@ where
 
     // Returns true if `a` is better than `b` for this player
     let is_better = |a: f32, b: f32| {
-        if maximizing { a.total_cmp(&b).is_gt() } else { a.total_cmp(&b).is_lt() }
+        if maximizing {
+            a.total_cmp(&b).is_gt()
+        } else {
+            a.total_cmp(&b).is_lt()
+        }
     };
 
     // Returns true if the value is a winning value for this player
     let is_winning_value = |v: f32| {
-        if maximizing { v.total_cmp(&wins_value).is_ge() } else { v.total_cmp(&wins_value).is_le() }
+        if maximizing {
+            v.total_cmp(&wins_value).is_ge()
+        } else {
+            v.total_cmp(&wins_value).is_le()
+        }
     };
 
     // Quality of the value of the returned response
@@ -245,7 +252,6 @@ where
     let mut best_value = if maximizing { -f32::INFINITY } else { f32::INFINITY };
     let mut best_quality: u32 = 0;
     let mut pruned = false;
-
 
     for candidate in &candidates {
         // Preliminary value and quality of this candidate, which may be updated by search.
@@ -312,8 +318,8 @@ where
         };
         assert!(bound_check); // Sanity check
 
-        // At this point, the value of this state becomes the value of the best response to it, and the quality becomes its
-        // quality + 1.
+        // At this point, the value of this state becomes the value of the best response to it, and the quality becomes its quality
+        // + 1.
 
         // Save the value of this state in the T-table if the ply was not pruned. Pruning results in an incorrect value because the
         // search was interrupted and potentially better candidates were not considered.

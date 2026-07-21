@@ -95,8 +95,8 @@ impl TranspositionTable {
     ///
     /// # Arguments
     /// * `fingerprint` - Fingerprint of state to be checked for
-    /// * `min_quality` - Minimum quality. If `None`, any quality is accepted. If `Some(n)`, only entries with
-    ///   quality `>= n` are returned.
+    /// * `min_quality` - Minimum quality. If `None`, any quality is accepted. If `Some(n)`, only entries with quality `>= n` are
+    ///   returned.
     ///
     /// # Returns
     /// Optional result as (value, quality)
@@ -123,9 +123,13 @@ impl TranspositionTable {
     /// ```
     pub fn check_min_quality(&mut self, fingerprint: u64, min_quality: Option<u32>) -> Option<(f32, u32)> {
         #[cfg(feature = "analysis_transposition_table")]
-        { self.checks += 1; }
+        {
+            self.checks += 1;
+        }
         let result = self.table.get(&fingerprint).and_then(|entry| {
-            if let Some(min) = min_quality && entry.q < min {
+            if let Some(min) = min_quality
+                && entry.q < min
+            {
                 return None;
             }
             Some((entry.value, entry.q))
@@ -186,7 +190,6 @@ impl TranspositionTable {
     /// assert_eq!(table.check(12345), Some((2.0, 7))); // New value
     /// ```
     pub fn update(&mut self, fingerprint: u64, value: f32, quality: u32) {
-
         #[cfg(feature = "analysis_transposition_table")]
         {
             let occupied = self.table.contains_key(&fingerprint);

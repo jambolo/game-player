@@ -26,14 +26,14 @@
 //!
 //! #[derive(Debug, Clone)]
 //! struct GameState {
-//!     board: u64,           // Simplified board representation
-//!     current_player: bool, // true = white/alice, false = black/bob
+//!     board: u64,               // Simplified board representation
+//!     current_player: PlayerId, // Alice = white, Bob = black
 //!     move_count: u32,
 //! }
 //!
 //! impl GameState {
 //!     fn new() -> Self {
-//!         Self { board: 0x1234567890abcdef, current_player: true, move_count: 0 }
+//!         Self { board: 0x1234567890abcdef, current_player: PlayerId::Alice, move_count: 0 }
 //!     }
 //!
 //!     fn is_game_over(&self) -> bool { self.move_count > 50 }
@@ -58,7 +58,7 @@
 //!     }
 //!
 //!     fn whose_turn(&self) -> PlayerId {
-//!         if self.current_player { PlayerId::Alice } else { PlayerId::Bob }
+//!         self.current_player
 //!     }
 //!
 //!     fn is_terminal(&self) -> bool {
@@ -69,7 +69,7 @@
 //!         // Apply move and return new state
 //!         Self {
 //!             board: self.board.wrapping_add(1), // Simplified board update
-//!             current_player: !self.current_player,
+//!             current_player: self.current_player.other(),
 //!             move_count: self.move_count + 1,
 //!         }
 //!     }
