@@ -2,9 +2,7 @@
 
 This crate provides the base components for implementing a player in a two-person game.
 
-This is a **WORK IN PROGRESS**
-
-`develop` branch: ![Rust](https://github.com/jambolo/game-player/actions/workflows/rust.yml/badge.svg?branch=develop) [![codecov](https://codecov.io/gh/jambolo/game-player/branch/develop/graph/badge.svg)](https://codecov.io/gh/jambolo/game-player)
+![CI](https://github.com/jambolo/game-player/actions/workflows/ci.yml/badge.svg?branch=develop) [![codecov](https://codecov.io/gh/jambolo/game-player/branch/develop/graph/badge.svg)](https://codecov.io/gh/jambolo/game-player)
 
 ## Overview
 
