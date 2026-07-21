@@ -1,15 +1,19 @@
 # game-player User's Guide
 
 `game-player` provides the building blocks for writing a computer player for a two-person game. This guide explains what the
-crate does, how to decide which search algorithm to use, how the minimax search works, and how to put it all together into a
-working player, using tic-tac-toe as an example.
+crate does, how to decide which of its two search algorithms — alpha-beta minimax and Monte Carlo Tree Search (MCTS) — fits
+your game, how each algorithm works, and how to put the pieces together into a working player. Both algorithms get a complete
+worked example, using tic-tac-toe as the game.
 
 ## Contents
 
 - [Overview](#overview)
 - [Choosing a Search Algorithm](#choosing-a-search-algorithm)
 - [The Minimax Algorithm](#the-minimax-algorithm)
+- [The MCTS Algorithm](#the-mcts-algorithm)
 - [Example: A Tic-Tac-Toe Player Using Minimax](#example-a-tic-tac-toe-player-using-minimax)
+- [Example: A Tic-Tac-Toe Player Using MCTS](#example-a-tic-tac-toe-player-using-mcts)
+- [Where to Go From Here](#where-to-go-from-here)
 
 ## Overview
 
@@ -18,26 +22,45 @@ This crate answers that question with game tree search. It explores the moves av
 replies, the replies to those replies, and so on, and then chooses the move that leads to the best reachable outcome.
 
 The search algorithms themselves are game-independent. What makes them play *your* game is a set of traits that you implement
-to describe the game's rules:
+to describe the game's rules. Both algorithms share one trait — `State` (in `game_player::state`), which represents a
+position: it knows whose turn it is, whether the game is over, and how to apply a move to produce the next position, and it
+provides a `fingerprint()` hash used for caching. Each algorithm then has its own pair of traits:
 
-| You provide | Trait | Purpose |
+| Search | Position judgment | Move generation |
 | --- | --- | --- |
-| A game state | `State` (in `game_player::state`) | Represents a position; knows whose turn it is, whether the game is over, and how to apply a move to produce the next position. Also provides a `fingerprint()` hash used for caching. |
-| A position evaluator | `StaticEvaluator` (in `game_player::static_evaluator`) | Assigns a numeric value to a position without any lookahead — the search's notion of "how good is this position?" |
-| A move generator | `ResponseGenerator` (in `game_player::minimax`) | Lists every legal move available in a position. |
+| Minimax | `StaticEvaluator` (in `game_player::static_evaluator`) — assigns a numeric value to a position without any lookahead | `minimax::ResponseGenerator` — `generate(&self, state, depth)` lists every legal move |
+| MCTS | `mcts::ValueEstimator` — estimates a position's value by any strategy, e.g. a random playout or a static evaluation | `mcts::ResponseGenerator` — `generate(&self, state)` lists every legal move (no `depth` argument) |
 
-With those three pieces in place, a single function call runs the search:
+The two `ResponseGenerator` traits are distinct types with nearly identical jobs; if you implement both searches for one game,
+you implement both traits (usually by delegating to one shared move-listing function).
+
+With the pieces in place, a single function call runs either search:
 
 ```rust
-use game_player::minimax::search;
+use game_player::{minimax, mcts};
 
-if let Some(action) = search(&evaluator, &response_generator, &state, max_depth) {
+// Minimax: search the game tree exhaustively to `max_depth` plies.
+if let Some(action) = minimax::search(&evaluator, &minimax_moves, &state, max_depth) {
+    let next_state = state.apply(&action);
+    // make the move...
+}
+
+// MCTS: run `max_iterations` iterations of Monte Carlo Tree Search.
+if let Some(action) = mcts::search(
+    &state,
+    &mcts_moves,
+    &estimator,
+    mcts::DEFAULT_EXPLORATION_CONSTANT,
+    mcts::DEFAULT_INITIAL_VALUE_WEIGHT,
+    false, // estimate_on_expansion
+    max_iterations,
+) {
     let next_state = state.apply(&action);
     // make the move...
 }
 ```
 
-`search` returns the best action for the player whose turn it is, or `None` if that player has no legal responses.
+Both searches return the best action found for the player whose turn it is, or `None` if that player has no legal responses.
 
 ### The players: Alice and Bob
 
@@ -49,26 +72,29 @@ roles are not:
 
 Which of your game's players is "Alice" is up to you (e.g., White in chess, X in tic-tac-toe); just be consistent.
 
-### The evaluator's invariant
+### Two perspective conventions — don't mix them up
 
-`StaticEvaluator::evaluate` must **always** return the value of a position *from Alice's perspective*, regardless of whose turn
-it is: higher means better for Alice, lower means better for Bob. Do not flip the sign based on the player to move — the
-search's max/min logic depends on this convention, and violating it makes the search choose wrong moves.
+The two position-judgment traits use **different value conventions**, and each search depends on its own convention being
+honored. Violating either one makes the corresponding search choose wrong moves.
 
-Values must lie within `[bob_wins_value(), alice_wins_value()]`. A position where Alice has won must evaluate to
-`alice_wins_value()`, and one where Bob has won must evaluate to `bob_wins_value()`.
+- **`StaticEvaluator::evaluate` (minimax) is always from Alice's perspective**, regardless of whose turn it is: higher means
+  better for Alice, lower means better for Bob. Do not flip the sign based on the player to move. Values must lie within
+  `[bob_wins_value(), alice_wins_value()]`; a position where Alice has won must evaluate to `alice_wins_value()`, and one
+  where Bob has won to `bob_wins_value()`.
+- **`ValueEstimator::estimate` (MCTS) is from the perspective of the player to move** (`state.whose_turn()`), and its value
+  must lie in `[0.0, 1.0]`: `0.0` means a certain loss for that player, `1.0` a certain win, `0.5` a draw. For terminal
+  states the returned value must be the exact outcome.
 
-### What the search assumes
+### What the searches assume
 
-The minimax search assumes a **two-player, zero-sum game with perfect information** and alternating turns: what is good for one
-player is exactly as bad for the other, and both players can see the whole position. Classic examples are tic-tac-toe,
-checkers, chess, reversi, and connect-four.
+Both searches assume a **two-player, zero-sum game with perfect information**: what is good for one player is exactly as bad
+for the other, and both players can see the whole position. Classic examples are tic-tac-toe, checkers, chess, reversi, and
+connect-four.
 
 ## Choosing a Search Algorithm
 
-The crate's design anticipates two search algorithms: **minimax with alpha-beta pruning** (implemented today) and **Monte Carlo
-Tree Search (MCTS)** (planned — see the roadmap in the README). Even though only minimax is currently available, it is worth
-understanding the trade-offs so you can structure your player accordingly.
+The crate provides two search algorithms: **minimax with alpha-beta pruning** and **Monte Carlo Tree Search (MCTS)**. It is
+worth understanding the trade-offs between them so you can structure your player accordingly.
 
 Choose **minimax** when:
 
@@ -82,10 +108,11 @@ Choose **minimax** when:
 - **You want deterministic, explainable play.** Given the same position and depth, minimax always returns the same move, and
   the chosen line can be read directly out of the tree.
 
-Choose **MCTS** (when it becomes available) when:
+Choose **MCTS** when:
 
-- **A good evaluation function is hard to write.** MCTS estimates position values statistically from playouts instead of
-  requiring a hand-crafted evaluator.
+- **A good evaluation function is hard to write.** MCTS estimates position values with a pluggable estimator — a random
+  playout to the end of the game is the classic choice, but any strategy works — instead of requiring a hand-crafted
+  evaluator.
 - **The branching factor is large.** MCTS focuses effort on promising branches rather than visiting every one, so it degrades
   gracefully as the move count grows.
 - **You want anytime behavior.** MCTS produces a usable answer whenever it is stopped, and the answer improves smoothly with
@@ -93,12 +120,13 @@ Choose **MCTS** (when it becomes available) when:
 - **Strategic, long-horizon judgment matters more than short tactics.** Playout statistics capture long-term consequences that
   a depth-limited minimax may not see.
 
-For small games — tic-tac-toe included — minimax is the clear choice: the tree is tiny, a perfect evaluator for terminal
-positions is trivial to write, and the search plays perfectly.
+For a game as small as tic-tac-toe, either algorithm plays it well; minimax plays it *perfectly*, because the whole tree fits
+within its search depth. This guide builds both players anyway — the small game keeps the code readable — and the MCTS example
+ends by pitting the two against each other.
 
 ## The Minimax Algorithm
 
-### The core idea
+### The core idea of minimax
 
 Minimax models a game as alternating turns of two opponents with exactly opposite goals. Starting from the current position, it
 builds a tree: the root is the current position, its children are the positions reachable in one move, their children are the
@@ -157,11 +185,90 @@ guidance:
 - Descent stops early at any position whose value already indicates a win, and at any position for which the response generator
   returns no moves — so make your generator return an empty `Vec` for terminal positions.
 
+## The MCTS Algorithm
+
+### The core idea of MCTS
+
+Where minimax explores every line to a fixed depth, MCTS grows a search tree *incrementally and asymmetrically*: it spends its
+budget on the lines that look most promising so far, while still occasionally probing neglected ones. It needs no
+Alice-perspective evaluation function — just an *estimator* that can produce a rough value for any position — and it can be
+stopped at any time, returning the best answer found so far.
+
+Each call to `mcts::search` runs a fixed number of iterations, and every iteration performs the same four phases:
+
+1. **Selection** — starting at the root, descend the tree by repeatedly moving to the child with the highest UCT score (see
+   below), until reaching a node that still has untried moves, has no children, or is terminal.
+2. **Expansion** — add a new child to the selected node by applying one of its untried moves.
+3. **Evaluation** — call the `ValueEstimator` on the new child's state to get a value in `[0.0, 1.0]`.
+4. **Back-propagation** — walk from the new child back up to the root, updating each ancestor's visit count and value sum with
+   the result.
+
+After the last iteration, the returned action is the one leading to the **most-visited** child of the root — visit count,
+not average value, because it is the more robust statistic: a child only accumulates visits by repeatedly surviving selection.
+
+### The UCT score
+
+Selection balances *exploitation* (revisit the child that has scored well) against *exploration* (try the child we know little
+about) with the UCT formula. For a child with `visits` visits, accumulated `value_sum`, and parent visit count `N`:
+
+```text
+Q   = value_sum / visits                 (average result so far)
+UCT = Q + c * sqrt(ln(N) / visits)
+```
+
+The first term favors children that have performed well; the second grows for children visited rarely relative to their
+parent. The constant `c` (the `exploration_constant` parameter) sets the balance: higher values explore more. A never-visited
+child has an infinite UCT score, so it is always tried before any sibling is revisited.
+
+### The `ValueEstimator` contract
+
+`ValueEstimator::estimate(&self, state, rg) -> f32` is MCTS's counterpart to minimax's `StaticEvaluator`, but its convention is
+different — see [the perspective conventions](#two-perspective-conventions--dont-mix-them-up) above. It returns a value in
+`[0.0, 1.0]` from the perspective of **the player to move** (`state.whose_turn()`): `0.0` a certain loss for that player,
+`1.0` a certain win, `0.5` a draw, and for terminal states the exact outcome.
+
+Any strategy that produces such a value qualifies: a random playout to the end of the game (the classic MCTS rollout, using
+the `rg` argument to generate moves), a static evaluation, a neural network. The estimator is pluggable precisely so you can
+start with something cheap and swap in something stronger later.
+
+If you already have an Alice-perspective `StaticEvaluator`, you can adapt it: normalize its output into `[0.0, 1.0]` with
+`v01 = (eval - bob_wins_value()) / (alice_wins_value() - bob_wins_value())`, then return `v01` when `whose_turn()` is Alice
+and `1.0 - v01` when it is Bob. The MCTS example below does exactly this.
+
+### How MCTS stays adversarial
+
+Minimax alternates max and min levels explicitly. MCTS achieves the same thing through bookkeeping: each node's statistics are
+stored from the perspective of **the player who chose the move leading into it** (i.e. `whose_turn()` of the *parent's*
+state). During back-propagation, each ancestor is credited `value` if its perspective player matches the evaluated leaf's
+player to move, and `1.0 - value` otherwise. With every node scored from its chooser's point of view, selection is a plain
+argmax of UCT at every level — no max/min alternation needed — and the search remains correct even in games where a player may
+move twice in a row (perspectives are compared by `whose_turn()` equality, never by ply parity).
+
+### Tuning knobs
+
+`mcts::search` takes four tuning parameters:
+
+- **`exploration_constant`** (`c`, default `DEFAULT_EXPLORATION_CONSTANT` = √2) — the UCT exploration weight. Higher values
+  favor exploring less-visited nodes over exploiting the best-known one.
+- **`initial_value_weight`** (`w`, default `DEFAULT_INITIAL_VALUE_WEIGHT` = `0.0`) — how much to trust a node's first
+  estimate. Each newly created node stores the estimator's initial opinion of it (`v0`); `w` blends that opinion into UCT as
+  if the node had already been visited `w` extra times with that result: `n_eff = visits + w`,
+  `Q = (value_sum + w*v0) / n_eff`, `UCT = Q + c * sqrt(ln(N) / n_eff)`. `0.0` disables the blend (pure classic UCT); larger
+  values let the estimator's judgment dominate longer before accumulated visit statistics take over.
+- **`estimate_on_expansion`** — chooses between lazy and eager expansion. `false` (the default) is lazy: each iteration
+  creates and estimates exactly one child, which is the right choice for expensive estimators such as full playouts. `true` is
+  eager: every untried child of the expanded node is created and estimated at once (one estimator call each), letting UCT rank
+  all of them immediately — worthwhile for cheap estimators such as a static evaluation, wasteful for expensive ones, and
+  pointless when `initial_value_weight` is `0.0`, since the stored estimates would then never be used.
+- **`max_iterations`** — the search budget. More iterations play stronger, with cost growing linearly; because MCTS is an
+  anytime algorithm, there is no "cliff" — pick the largest budget your time allows.
+
 ## Example: A Tic-Tac-Toe Player Using Minimax
 
 This section builds a complete computer tic-tac-toe player. Alice plays **X** and Bob plays **O**. The pieces we need, in
 order: an action type, a state type implementing `State`, an evaluator implementing `StaticEvaluator`, a move generator
-implementing `ResponseGenerator`, and a game loop that calls `search`.
+implementing `ResponseGenerator`, and a game loop that calls `search`. (The action, state, and board helpers built here are
+shared by the [MCTS example](#example-a-tic-tac-toe-player-using-mcts) that follows.)
 
 ### The action
 
@@ -419,14 +526,161 @@ Draw
 The complete program is included in the repository as [examples/tic_tac_toe.rs](../examples/tic_tac_toe.rs); run it with
 `cargo run --example tic_tac_toe`.
 
-### Where to go from here
+## Example: A Tic-Tac-Toe Player Using MCTS
 
-To adapt this pattern to your own game:
+Now the same game with the other search. The `Placement`, `Square`, `Board`, and `LINES` definitions — everything through the
+`State` implementation — carry over unchanged from the minimax example; a state knows nothing about which search is exploring
+it. What changes are the two search-facing traits: the move generator and the position judgment. To finish, we'll pit the MCTS
+player against the perfect minimax player from the previous section.
+
+### The MCTS move generator
+
+`mcts::ResponseGenerator` is a distinct trait from `minimax::ResponseGenerator` — its `generate` takes no `depth` argument —
+but for tic-tac-toe the move list is identical:
+
+```rust
+use game_player::mcts;
+
+struct MctsMoves;
+
+impl mcts::ResponseGenerator for MctsMoves {
+    type State = Board;
+
+    fn generate(&self, board: &Board) -> Vec<Placement> {
+        if board.is_terminal() {
+            return Vec::new(); // No responses once the game is over.
+        }
+        (0..9)
+            .filter(|&i| board.squares[i] == Square::Empty)
+            .map(|index| Placement { index })
+            .collect()
+    }
+}
+```
+
+### The value estimator
+
+The classic MCTS estimator is a random playout: play random legal moves (via the `rg` argument) until the game ends, and
+report the outcome. Here we instead demonstrate adapting the *lines* heuristic from the minimax evaluator, following the
+recipe in [the `ValueEstimator` contract](#the-valueestimator-contract): compute the Alice-perspective score, rescale it into
+`[0.0, 1.0]`, and flip it when it is Bob's turn. This also makes the example fully deterministic — no RNG anywhere.
+
+Mind the two halves of the contract: terminal states must return the **exact** outcome (`1.0` win / `0.0` loss / `0.5` draw),
+and every value is from the perspective of `state.whose_turn()` — not Alice's:
+
+```rust
+/// `mcts::ValueEstimator`: value in [0.0, 1.0] from the perspective of the
+/// CURRENT player (`state.whose_turn()`). Reuses the lines heuristic from the
+/// minimax `Evaluator`, rescaled into [0, 1] and flipped for Bob's turn.
+struct LinesEstimator;
+
+impl mcts::ValueEstimator for LinesEstimator {
+    type State = Board;
+    type ResponseGenerator = MctsMoves;
+
+    fn estimate(&self, state: &Board, _rg: &MctsMoves) -> f32 {
+        match state.winner() {
+            // Terminal states must report the exact outcome.
+            Some(winner) => {
+                if winner == state.whose_turn() { 1.0 } else { 0.0 }
+            }
+            None if state.is_full() => 0.5, // Draw.
+            None => {
+                // Alice-perspective score in [-8, 8]: +1 per O-free line, -1 per X-free line.
+                let mut score = 0.0;
+                for line in &LINES {
+                    let has_x = line.iter().any(|&i| state.squares[i] == Square::X);
+                    let has_o = line.iter().any(|&i| state.squares[i] == Square::O);
+                    if !has_o {
+                        score += 1.0;
+                    }
+                    if !has_x {
+                        score -= 1.0;
+                    }
+                }
+                // Rescale into [0, 1], then flip perspective when it is Bob's turn.
+                let v01 = (score + 8.0) / 16.0;
+                if state.whose_turn() == PlayerId::Alice { v01 } else { 1.0 - v01 }
+            }
+        }
+    }
+}
+```
+
+The (mildly counterintuitive) `winner == state.whose_turn()` check handles both outcomes: in tic-tac-toe the winner is always
+the player who just moved, so from the perspective of the player *now* to move a decided game is normally a loss (`0.0`) — but
+the check stays correct even for game rules where that assumption fails.
+
+### Playing against the minimax player
+
+The sternest test available: MCTS as X against the perfect minimax player from the previous example as O. Since perfect play
+never loses, the best MCTS can achieve is a draw — and with a healthy iteration budget, that is what it achieves:
+
+```rust
+use game_player::mcts::DEFAULT_EXPLORATION_CONSTANT;
+use game_player::minimax;
+
+const ITERATIONS: u32 = 10_000;
+
+fn main() {
+    let mcts_moves = MctsMoves;
+    let estimator = LinesEstimator;
+    let minimax_evaluator = Evaluator;
+    let minimax_moves = Moves; // the minimax::ResponseGenerator from the previous example
+
+    let mut board = Board::new();
+    while !board.is_terminal() {
+        let placement = if board.whose_turn() == PlayerId::Alice {
+            // MCTS plays X.
+            mcts::search(
+                &board,
+                &mcts_moves,
+                &estimator,
+                DEFAULT_EXPLORATION_CONSTANT,
+                0.0,   // initial_value_weight: pure classic UCT
+                false, // estimate_on_expansion: lazy
+                ITERATIONS,
+            )
+            .expect("a non-terminal board always has legal moves")
+        } else {
+            // Perfect minimax plays O.
+            minimax::search(&minimax_evaluator, &minimax_moves, &board, 9)
+                .expect("a non-terminal board always has legal moves")
+        };
+        println!("{:?} plays square {}", board.whose_turn(), placement.index);
+        board = board.apply(&placement);
+        show(&board);
+    }
+
+    match board.winner() {
+        Some(player) => println!("{player:?} wins"),
+        None => println!("Draw"),
+    }
+}
+```
+
+To experiment with the tuning knobs, try `initial_value_weight = 1.0` (the estimator's first impression of each node counts as
+one virtual visit) with `estimate_on_expansion = true` — with an estimator this cheap, eagerly estimating every child on
+expansion is affordable and lets UCT rank new children by the heuristic instead of visiting them in arbitrary order. Lowering
+`ITERATIONS` is instructive too: watch how the play degrades gracefully rather than falling off a cliff.
+
+The complete program is included in the repository as
+[examples/tic_tac_toe_mcts.rs](../examples/tic_tac_toe_mcts.rs); run it with `cargo run --example tic_tac_toe_mcts`. It goes
+further than the listing above: it plays MCTS on both sides of the board, across lazy and eager expansion and zero and nonzero
+initial-value weights, and asserts that MCTS never loses to perfect play in any configuration.
+
+## Where to Go From Here
+
+To adapt these patterns to your own game:
 
 1. Replace `Placement`/`Board` with your game's action and state, keeping `apply` non-mutating and `fingerprint` a faithful
    position hash (use Zobrist hashing when the state doesn't fit in 64 bits).
-2. Write an evaluator that captures what "winning" looks like in your game — material, mobility, territory — always from
-   Alice's perspective and always within `[bob_wins_value(), alice_wins_value()]`.
-3. Generate all legal moves, including explicit "pass" actions if your game forces passes; return an empty `Vec` only when the
-   player truly cannot respond.
-4. Tune `max_depth` to your time budget.
+2. Generate all legal moves, including explicit "pass" actions if your game forces passes; return an empty `Vec` only when the
+   player truly cannot respond. If you use both searches, implement both `ResponseGenerator` traits over one shared
+   move-listing function.
+3. For **minimax**: write an evaluator that captures what "winning" looks like in your game — material, mobility, territory —
+   always from Alice's perspective and always within `[bob_wins_value(), alice_wins_value()]`; then tune `max_depth` to your
+   time budget.
+4. For **MCTS**: write an estimator that returns `[0.0, 1.0]` from the current player's perspective — start with a random
+   playout or a rescaled static evaluation and swap in something stronger later; then tune `max_iterations` to your time
+   budget, and reach for `initial_value_weight`/`estimate_on_expansion` once you have a cheap estimator worth trusting.

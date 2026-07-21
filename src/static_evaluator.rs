@@ -60,7 +60,9 @@ mod tests {
     // Mock static evaluator for testing
     struct MockEvaluator;
 
-    impl StaticEvaluator<MockGameState> for MockEvaluator {
+    impl StaticEvaluator for MockEvaluator {
+        type State = MockGameState;
+
         fn evaluate(&self, state: &MockGameState) -> f32 {
             if state.terminal {
                 if state.alice_wins {

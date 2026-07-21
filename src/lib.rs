@@ -1,7 +1,7 @@
 //! Game Player
 //!
-//! This crate provides the foundational traits and structures needed to implement a player for two-person perfect and hidden
-//! information games.
+//! This crate provides the foundational traits and structures needed to implement a player for two-person,
+//! perfect-information games, offering both a minimax search and a Monte Carlo Tree Search.
 //!
 //! # Minimax Search
 //!
@@ -122,6 +122,30 @@
 //!     None => println!("No moves available"),
 //! }
 //! ```
+//!
+//! # Monte Carlo Tree Search
+//!
+//! The crate also provides a Monte Carlo Tree Search implementation in the [`mcts`] module. Integration follows the
+//! same pattern as minimax: implement [`State`], implement [`ResponseGenerator`](mcts::ResponseGenerator) (a trait
+//! distinct from [`ResponseGenerator`](minimax::ResponseGenerator) in the `minimax` module - its `generate` method
+//! takes no depth parameter), and implement [`ValueEstimator`](mcts::ValueEstimator), then call
+//! [`search`](mcts::search).
+//!
+//! [`ValueEstimator`](mcts::ValueEstimator) supplies the evaluation MCTS uses in place of, or in addition to, random
+//! playouts: its `estimate` method returns a value in `[0.0, 1.0]` from the perspective of the state's current
+//! player (`state.whose_turn()`), where 0.0 is a loss, 1.0 is a win, and 0.5 is a draw; for terminal states the
+//! returned value must be the exact outcome. Any strategy qualifies, including a random rollout to a terminal
+//! state, a static evaluation function, or a neural network.
+//!
+//! Two parameters tune the search. `initial_value_weight` blends a node's initial value estimate into the UCT
+//! formula as a number of virtual visits; a weight of `0.0` disables the blend, reducing to the standard UCT
+//! formula. `estimate_on_expansion` selects between lazy expansion (`false`, the default: one child is created and
+//! estimated per iteration) and eager expansion (`true`: every untried child of a node is created and estimated at
+//! once) - eager expansion trades more estimator calls per expansion for fewer iterations, so it suits cheap
+//! estimators such as a static evaluation function rather than expensive playouts.
+//! [`DEFAULT_EXPLORATION_CONSTANT`](mcts::DEFAULT_EXPLORATION_CONSTANT) and
+//! [`DEFAULT_INITIAL_VALUE_WEIGHT`](mcts::DEFAULT_INITIAL_VALUE_WEIGHT) provide reasonable starting values for the
+//! exploration constant and initial-value weight, respectively.
 
 pub mod mcts;
 pub mod minimax;

@@ -1,16 +1,33 @@
 //! Monte Carlo Tree Search (MCTS) module
 //!
-//! This module implements the Monte Carlo Tree Search (MCTS) algorithm for making decisions in two-player perfect and hidden
-//! information games. It provides the core MCTS logic, including selection, expansion, simulation (rollout), and back-propagation
-//! phases. The MCTS algorithm builds a search tree incrementally and uses random simulations to evaluate the potential of
-//! different moves. The module is designed to be generic and works with any game state that implements the `State` trait, along
-//! with the `ResponseGenerator` and `Rollout` traits.
+//! This module implements the Monte Carlo Tree Search (MCTS) algorithm for making decisions in two-player, perfect-information
+//! games. It builds a search tree incrementally through four phases: Selection, Expansion, Evaluation, and Back-propagation.
+//! The Evaluation phase runs a `ValueEstimator`, which returns a value in `[0.0, 1.0]` from the perspective of the current
+//! player (`state.whose_turn()`), with terminal states returning the exact outcome (0.0 loss, 1.0 win, 0.5 draw); random
+//! playout to a terminal state is one possible estimator strategy among others, such as a static evaluation function or a
+//! neural network. The module is designed to be generic and works with any game state that implements the `State` trait,
+//! along with the `ResponseGenerator` and `ValueEstimator` traits.
+//!
+//! Node statistics (`value_sum`, `initial_value`) are stored from the perspective of the player who chose the action leading
+//! into the node — that is, the `whose_turn()` of the parent node's state, meaning "wins for the player who just moved". This
+//! convention is why Selection is a plain argmax of UCT at every level of the tree, and why the search remains correct for
+//! adversarial two-player play; perspective comparisons throughout use `whose_turn()` equality, never ply parity.
+//!
+//! Two knobs tune the search. `initial_value_weight` (`w`) blends a node's stored initial estimate into UCT as `w` virtual
+//! visits: with `n_eff = visits + w` and `Q = (value_sum + w * initial_value) / n_eff`, `w = 0` reduces to the classic UCT
+//! formula. `estimate_on_expansion` selects lazy expansion (`false`: one child created and estimated per iteration) versus
+//! eager expansion (`true`: all remaining children created and estimated at once, one estimator call per child, with only
+//! the chosen child's estimate back-propagated) — eager suits cheap estimators such as static evaluation, since it costs
+//! branching-factor-times more estimator calls per expansion than lazy expansion.
 
 use crate::state::*;
 use indextree::{Arena, NodeId};
 
 /// Default exploration constant for the UCT formula
 pub const DEFAULT_EXPLORATION_CONSTANT: f32 = std::f32::consts::SQRT_2;
+
+/// Default weight given to a node's initial value estimate in the UCT formula
+pub const DEFAULT_INITIAL_VALUE_WEIGHT: f32 = 0.0;
 
 /// Response generator trait for MCTS search
 pub trait ResponseGenerator {
@@ -33,19 +50,16 @@ pub trait ResponseGenerator {
     fn generate(&self, state: &Self::State) -> Vec<<Self::State as State>::Action>;
 }
 
-/// Rollout trait for MCTS search
+/// Value estimator trait for MCTS search
 ///
-/// The Rollout trait defines the interface for performing rollouts in a game state. It is used by the MCTS algorithm to simulate
-/// game play and evaluate the potential outcomes of different moves. It is implemented for specific game states in the
-/// game-specific code.
-///
-/// # Type Parameters
-/// * `S` - Game state type
+/// Provides the evaluation used in the MCTS Evaluation phase. Implementations may use
+/// any strategy: random playout to a terminal state (the classic MCTS rollout), a
+/// static evaluation function, a neural network, etc.
 ///
 /// # Examples
 ///
 /// ```rust
-/// # use game_player::mcts::{Rollout, ResponseGenerator};
+/// # use game_player::mcts::{ValueEstimator, ResponseGenerator};
 /// # use game_player::state::*;
 /// # #[derive(Debug, Clone, Default)]
 /// # struct TestGameState { value: i32 }
@@ -63,36 +77,43 @@ pub trait ResponseGenerator {
 ///     type State = TestGameState;
 ///     fn generate(&self, _state: &TestGameState) -> Vec<TestAction> { vec![TestAction] }
 /// }
-/// struct TestRollout;
-/// impl Rollout for TestRollout {
+/// struct ConstantEstimator;
+/// impl ValueEstimator for ConstantEstimator {
 ///     type State = TestGameState;
 ///     type ResponseGenerator = TestResponseGen;
-///     fn play(&self, state: &TestGameState, _rg: &TestResponseGen) -> f32 { state.value as f32 }
+///     fn estimate(&self, _state: &TestGameState, _rg: &TestResponseGen) -> f32 { 0.5 }
 /// }
 /// let state = TestGameState { value: 42 };
-/// let rollout = TestRollout;
+/// let estimator = ConstantEstimator;
 /// let rg = TestResponseGen;
-/// let score = rollout.play(&state, &rg);
-/// assert_eq!(score, 42.0);
+/// assert_eq!(estimator.estimate(&state, &rg), 0.5);
 /// ```
-pub trait Rollout {
+pub trait ValueEstimator {
     /// The type representing the game state
     type State: State;
+    /// The response generator type usable by playout-based estimators
     type ResponseGenerator: ResponseGenerator<State = Self::State>;
 
-    /// Performs a rollout (simulation) from the given state using the provided response generator, and returns the evaluated value.
-    ///
-    /// The rollout is a simulation of the game from the given state to a terminal state, following simple heuristics or random
-    /// moves. The result is a score in the range [-1.0, 1.0], where 1.0 indicates a win for the computer player, -1.0 indicates a
-    /// loss, and 0.0 indicates a draw.
+    /// Returns an estimate of the state's value in [0.0, 1.0] from the perspective of the
+    /// current player (`state.whose_turn()`): 0.0 is a terminal loss and 1.0 a terminal win
+    /// for that player; a draw is 0.5. For terminal states the returned value must be the
+    /// exact outcome. Implementations may use any strategy: random playout to a terminal
+    /// state (the classic MCTS rollout), a static evaluation function, a neural network, etc.
     ///
     /// # Arguments
-    /// * `state` - The game state to perform the rollout from
-    /// * `response_generator` - The response generator for producing legal actions
+    /// * `state` - The game state to estimate the value of
+    /// * `rg` - Response generator for producing legal actions (used by playout-based
+    ///   estimators; others may ignore it)
     ///
     /// # Returns
-    /// [-1.0, 1.0] score representing the outcome of the rollout from the perspective of the computer player.
-    fn play(&self, state: &Self::State, response_generator: &Self::ResponseGenerator) -> f32;
+    /// [0.0, 1.0] value estimate from the perspective of `state.whose_turn()`.
+    ///
+    /// # Adapting a StaticEvaluator
+    /// An Alice-perspective `StaticEvaluator` can be wrapped to implement this trait by
+    /// normalizing its output into `[0.0, 1.0]` and then flipping perspective for Bob: compute
+    /// `v01 = (eval - bob_wins_value()) / (alice_wins_value() - bob_wins_value())`, then return
+    /// `v01` when `state.whose_turn()` is Alice, or `1.0 - v01` when it is Bob.
+    fn estimate(&self, state: &Self::State, rg: &Self::ResponseGenerator) -> f32;
 }
 
 /// Represents a node in the MCTS tree
@@ -105,8 +126,6 @@ pub trait Rollout {
 /// ```rust
 /// # use game_player::mcts::ResponseGenerator;
 /// # use game_player::state::*;
-/// # use game_player::StaticEvaluator;
-/// # use indextree::{Arena, NodeId};
 ///
 /// # #[derive(Debug, Clone, Default)]
 /// # struct TestGameState { value: i32 }
@@ -130,7 +149,6 @@ pub trait Rollout {
 /// // This example shows basic usage of the test types
 /// assert_eq!(state.value, 42);
 /// ```
-/// ```
 struct Node<S>
 where
     S: State,
@@ -145,6 +163,9 @@ where
     visits: u32,
     /// Sum of the values of all simulations that passed through this node
     value_sum: f32,
+    /// Initial value estimate for this node, stored from the perspective of the player
+    /// who chose the action leading into it (None until an estimate is recorded)
+    initial_value: Option<f32>,
 }
 
 impl<S> Node<S>
@@ -171,6 +192,7 @@ where
             untried_actions,
             visits: 0,
             value_sum: 0.0,
+            initial_value: None,
         }
     }
 
@@ -185,31 +207,46 @@ where
         self.untried_actions.is_empty()
     }
 
-    // Calculates the UCT value for this node
+    // Calculates the UCT value for this node, blended with its initial value estimate
     //
     // The UCT formula balances exploitation (average reward) with exploration (uncertainty).
     // Higher UCT values indicate more promising nodes to explore.
     //
+    // With `w = initial_value_weight` and `v0 = self.initial_value`, the node's initial value
+    // is treated as `w` virtual visits: `n_eff = visits + w`, `Q = (value_sum + w*v0) / n_eff`,
+    // and `UCT = Q + c * sqrt(ln(parent_visits) / n_eff)`. The weight `w` only counts when
+    // `self.initial_value` is `Some` and `initial_value_weight > 0.0`; otherwise it is treated
+    // as `0.0`, which reduces the formula bit-for-bit to the legacy (unweighted) UCT.
+    //
     // # Arguments
     // * `arena` - The Arena containing all nodes
     // * `c` - Exploration constant (typically sqrt(2) ≈ 1.414)
+    // * `initial_value_weight` - Virtual-visit weight given to `self.initial_value`
     //
     // # Panics
     // Panics if the parent node does not exist or has zero visits.
     //
     // # Returns
-    // The UCT value for this node, or f32::INFINITY if unvisited
-    fn uct(&self, node_id: NodeId, arena: &Arena<Node<S>>, c: f32) -> f32 {
+    // The UCT value for this node, or f32::INFINITY if unvisited and no usable initial value
+    // estimate is present (i.e. `initial_value` is `None` or `initial_value_weight <= 0.0`)
+    fn uct(&self, node_id: NodeId, arena: &Arena<Node<S>>, c: f32, initial_value_weight: f32) -> f32 {
         if let Some(parent_node) = arena[node_id].parent().and_then(|parent_id| arena.get(parent_id)) {
-            // If this node has never been visited, return infinity to ensure it gets visited
-            if self.visits == 0 {
+            // The initial-value weight counts only when an estimate is present
+            let w = match self.initial_value {
+                Some(_) if initial_value_weight > 0.0 => initial_value_weight,
+                _ => 0.0,
+            };
+            // Never-visited node with no usable estimate: force a visit
+            if self.visits == 0 && w == 0.0 {
                 return f32::INFINITY;
             }
             let parent_visits = parent_node.get().visits;
             if parent_visits > 0 {
-                let confidence = c * ((parent_visits as f32).ln() / self.visits as f32).sqrt();
-                let mean_value = self.value_sum / self.visits as f32;
-                return mean_value + confidence;
+                let v0 = self.initial_value.unwrap_or(0.0);
+                let n_eff = self.visits as f32 + w;
+                let q = (self.value_sum + w * v0) / n_eff;
+                let confidence = c * ((parent_visits as f32).ln() / n_eff).sqrt();
+                return q + confidence;
             }
         }
 
@@ -218,29 +255,40 @@ where
 }
 
 // Holds static information for the MCTS search
-struct Context<'a, G, R>
+struct Context<'a, G, E>
 where
     G: ResponseGenerator,
-    R: Rollout<State = G::State>,
+    E: ValueEstimator<State = G::State>,
 {
     /// Function to generate all possible child states
     response_generator: &'a G,
-    /// Rollout implementation
-    rollout: &'a R,
+    /// Value estimator implementation
+    estimator: &'a E,
     /// Exploration constant for the UCT formula
     c: f32,
+    /// Weight of a node's initial value estimate in the UCT formula
+    initial_value_weight: f32,
+    /// If true, estimate all children when a node is expanded
+    estimate_on_expansion: bool,
 }
 
 /// Searches for the best action using the MCTS algorithm
 ///
-/// Performs the four phases of MCTS (Selection, Expansion, Rollout, Back Propagation) for the given number of iterations,
+/// Performs the four phases of MCTS (Selection, Expansion, Evaluation, Back Propagation) for the given number of iterations,
 /// building up statistics in the search tree.
 ///
 /// # Arguments
 /// * `s0` - Initial game state to serve as the root of the search tree
 /// * `rg` - Response generator that returns all possible actions from a state
-/// * `roll` - Rollout implementation for simulating games
-/// * `c` - Exploration constant for UCT calculation
+/// * `estimator` - Value estimator implementation for evaluating leaf states
+/// * `exploration_constant` - Exploration constant for UCT calculation
+/// * `initial_value_weight` - Weight of a node's initial value estimate in the UCT formula
+/// * `estimate_on_expansion` - If true, estimate all children when a node is expanded (eager
+///   expansion): every untried child is created and estimated at once, at a cost of
+///   branching-factor-times more estimator calls per expansion, so it suits cheap static
+///   evaluators rather than expensive playouts. Combining eager expansion with
+///   `initial_value_weight = 0` wastes the stored estimates, since unvisited children then
+///   fall back to `f32::INFINITY` in UCT and are chosen in arbitrary first-visit order.
 /// * `max_iterations` - Number of MCTS iterations to perform
 ///
 /// # Returns
@@ -249,17 +297,27 @@ where
 ///
 /// # Panics
 /// This function will panic if the UCT function ever returns NaN.
-pub fn search<S, G, R>(s0: &S, rg: &G, roll: &R, c: f32, max_iterations: u32) -> Option<S::Action>
+pub fn search<S, G, E>(
+    s0: &S,
+    rg: &G,
+    estimator: &E,
+    exploration_constant: f32,
+    initial_value_weight: f32,
+    estimate_on_expansion: bool,
+    max_iterations: u32,
+) -> Option<S::Action>
 where
     S: State + Clone,
     G: ResponseGenerator<State = S>,
-    R: Rollout<State = S, ResponseGenerator = G>,
+    E: ValueEstimator<State = S, ResponseGenerator = G>,
 {
     // Create context for the search
     let context = Context {
         response_generator: rg,
-        rollout: roll,
-        c,
+        estimator,
+        c: exploration_constant,
+        initial_value_weight,
+        estimate_on_expansion,
     };
 
     // Create the arena that will hold all nodes
@@ -274,15 +332,40 @@ where
         // Selection - traverse the tree to find the best leaf node to expand
         let mut node_id = select(root_id, &arena, &context);
 
-        // Expansion - add another child to the node if it is not terminal and has untried actions
-        if let Some(child_id) = expand(node_id, &mut arena, &context) {
-            node_id = child_id;
-        }
+        let value = if context.estimate_on_expansion {
+            // Eager expansion - create every remaining child at once; the estimator
+            // already ran on the chosen child, so its raw estimate back-propagates
+            // with no second call. Sibling estimates are stored, never back-propagated.
+            if let Some((child_id, raw_estimate)) = expand_eager(node_id, &mut arena, &context) {
+                node_id = child_id;
+                raw_estimate
+            } else {
+                // Terminal or childless node - evaluate it directly
+                estimate_leaf(node_id, &arena, &context)
+            }
+        } else {
+            // Expansion - add another child to the node if it is not terminal and has untried actions
+            let expanded = expand(node_id, &mut arena, &context);
+            if let Some(child_id) = expanded {
+                node_id = child_id;
+            }
 
-        // Rollout - evaluate the node using the Rollout implementation, and normalize the result to [0, 1]
-        let value = (rollout(node_id, &arena, &context) + 1.0) / 2.0;
+            // Evaluation - evaluate the node using the ValueEstimator implementation
+            let value = estimate_leaf(node_id, &arena, &context);
 
-        // Back-propagation - update the node and its ancestors with the rollout result
+            // Record a newly expanded child's initial value, adjusted to the perspective of
+            // the player who chose the action leading into it
+            if expanded.is_some() {
+                let parent_id = arena[node_id].parent().expect("expanded child has a parent");
+                let parent_player = arena[parent_id].get().state.whose_turn();
+                let child_player = arena[node_id].get().state.whose_turn();
+                let stored = if parent_player == child_player { value } else { 1.0 - value };
+                arena[node_id].get_mut().initial_value = Some(stored);
+            }
+            value
+        };
+
+        // Back-propagation - update the node and its ancestors with the evaluation result
         back_propagate(node_id, &mut arena, value);
     }
 
@@ -326,12 +409,13 @@ where
 //
 // # Returns
 // The node selected for expansion or evaluation
-fn select<G, R>(node_id: NodeId, arena: &Arena<Node<G::State>>, context: &Context<'_, G, R>) -> NodeId
+fn select<G, E>(node_id: NodeId, arena: &Arena<Node<G::State>>, context: &Context<'_, G, E>) -> NodeId
 where
     G: ResponseGenerator,
-    R: Rollout<State = G::State>,
+    E: ValueEstimator<State = G::State>,
 {
     let c = context.c;
+    let w = context.initial_value_weight;
     let mut selected = node_id;
 
     // Traverse the tree until a selectable node is found
@@ -343,8 +427,8 @@ where
         let best_child = *children
             .iter()
             .max_by(|&a, &b| {
-                let a_uct = arena.get(*a).unwrap().get().uct(*a, arena, c);
-                let b_uct = arena.get(*b).unwrap().get().uct(*b, arena, c);
+                let a_uct = arena.get(*a).unwrap().get().uct(*a, arena, c, w);
+                let b_uct = arena.get(*b).unwrap().get().uct(*b, arena, c, w);
                 a_uct.total_cmp(&b_uct)
             })
             .unwrap(); // Safe to unwrap because not_selectable ensures there are children
@@ -365,10 +449,10 @@ where
 //
 // # Returns
 // Some(child_node_id) if expansion was successful, None otherwise
-fn expand<G, R>(node_id: NodeId, arena: &mut Arena<Node<G::State>>, context: &Context<'_, G, R>) -> Option<NodeId>
+fn expand<G, E>(node_id: NodeId, arena: &mut Arena<Node<G::State>>, context: &Context<'_, G, E>) -> Option<NodeId>
 where
     G: ResponseGenerator,
-    R: Rollout<State = G::State>,
+    E: ValueEstimator<State = G::State>,
 {
     // Get the next untried action, or return None if there are no untried actions
     let action = arena[node_id].get_mut().untried_actions.pop()?;
@@ -387,50 +471,123 @@ where
     Some(child_id)
 }
 
-// Performs a rollout (simulation) from the given node and returns the evaluated value
+// Eagerly expands ALL untried actions of a node, estimating each new child exactly once
 //
-// In the current implementation, rollout simply evaluates the current node's state using the static evaluator rather than
-// performing random simulation.
+// Each child stores its perspective-adjusted initial value ("wins for the player who
+// just moved") and keeps zero visits. The best new child is chosen by argmax of the
+// stored initial value via total_cmp - equivalent to the UCT ordering among the
+// all-unvisited, equal-n_eff siblings, and well-defined even when the expanded node
+// itself has zero visits (where UCT's parent-visits precondition fails).
+//
+// # Arguments
+// * `node_id` - The node to expand
+// * `arena` - The arena containing all nodes
+// * `context` - The search context containing the response generator and estimator
+//
+// # Returns
+// Some((chosen_child_id, chosen_child_raw_estimate)) if at least one action was
+// untried, None otherwise. The raw estimate is from the chosen child state's
+// current player's perspective, ready for back-propagation with the child as leaf.
+fn expand_eager<G, E>(node_id: NodeId, arena: &mut Arena<Node<G::State>>, context: &Context<'_, G, E>) -> Option<(NodeId, f32)>
+where
+    G: ResponseGenerator,
+    E: ValueEstimator<State = G::State, ResponseGenerator = G>,
+{
+    let untried = std::mem::take(&mut arena[node_id].get_mut().untried_actions);
+    if untried.is_empty() {
+        return None;
+    }
+
+    let parent_player = arena[node_id].get().state.whose_turn();
+    let mut new_children: Vec<(NodeId, f32)> = Vec::with_capacity(untried.len());
+    for action in untried {
+        let child_state = arena[node_id].get().state.apply(&action);
+        let raw = context.estimator.estimate(&child_state, context.response_generator);
+        let stored = if parent_player == child_state.whose_turn() {
+            raw
+        } else {
+            1.0 - raw
+        };
+        let mut child_node = Node::new(child_state, Some(action), context.response_generator);
+        child_node.initial_value = Some(stored);
+        let child_id = arena.new_node(child_node);
+        node_id.append(child_id, arena);
+        new_children.push((child_id, raw));
+    }
+
+    // Choose the best new child by its stored (perspective-adjusted) initial value
+    new_children.into_iter().max_by(|a, b| {
+        let a_v0 = arena[a.0].get().initial_value.unwrap_or(0.0);
+        let b_v0 = arena[b.0].get().initial_value.unwrap_or(0.0);
+        a_v0.total_cmp(&b_v0)
+    })
+}
+
+// Evaluates the given node using the ValueEstimator implementation
+//
+// Returns the estimator's [0.0, 1.0] value for the node's state from the perspective of that
+// state's current player.
 //
 // # Arguments
 // * `node_id` - The node to evaluate
 // * `arena` - The arena containing all nodes
-// * `context` - The search context containing the rollout implementation
+// * `context` - The search context containing the value estimator implementation
 //
 // # Returns
-// [-1.0, 1.0] as the evaluation score for the node's game state
-fn rollout<G, R>(node_id: NodeId, arena: &Arena<Node<G::State>>, context: &Context<'_, G, R>) -> f32
+// [0.0, 1.0] as the evaluation score for the node's game state, from the perspective of that
+// state's current player
+fn estimate_leaf<G, E>(node_id: NodeId, arena: &Arena<Node<G::State>>, context: &Context<'_, G, E>) -> f32
 where
     G: ResponseGenerator,
-    R: Rollout<State = G::State, ResponseGenerator = G>,
+    E: ValueEstimator<State = G::State, ResponseGenerator = G>,
 {
-    context.rollout.play(&arena[node_id].get().state, context.response_generator)
+    context
+        .estimator
+        .estimate(&arena[node_id].get().state, context.response_generator)
 }
 
 // Back-propagates the value up the tree
 //
-// Updates the visit count and value sum for the given node and all of its ancestors up to the root.
+// Updates the visit count and value sum for the given node and all of its ancestors up to the
+// root. `value` is in [0.0, 1.0] from the perspective of `whose_turn()` at the leaf node's state.
+//
+// A node's `value_sum` is stored from the perspective of the player who chose the action leading
+// into it - i.e. `whose_turn()` of its parent node's state (the root has no parent, so its own
+// `whose_turn()` is used instead; the root's value_sum is never consulted by selection). Each
+// ancestor is credited `value` if its perspective player is the same as the leaf's current
+// player, or `1.0 - value` otherwise. Perspective comparisons use `whose_turn()` equality, never
+// ply parity, since a player may move twice in a row in some games.
 //
 // # Arguments
-// * `node_id` - The starting node for back-propagation
+// * `leaf_id` - The leaf node whose evaluation is being back-propagated
 // * `arena` - The arena containing all nodes
-// * `value` - The value to propagate up the tree
-fn back_propagate<S>(node_id: NodeId, arena: &mut Arena<Node<S>>, value: f32)
+// * `value` - The value to propagate up the tree, from the perspective of the leaf's current player
+fn back_propagate<S>(leaf_id: NodeId, arena: &mut Arena<Node<S>>, value: f32)
 where
     S: State,
 {
-    let mut current = Some(node_id);
+    let leaf_player = arena[leaf_id].get().state.whose_turn();
+    let mut current = Some(leaf_id);
     while let Some(id) = current {
+        let parent = arena[id].parent();
+        // Perspective of the player who chose the action leading into this node;
+        // the root uses its own state's player.
+        let perspective = match parent {
+            Some(parent_id) => arena[parent_id].get().state.whose_turn(),
+            None => arena[id].get().state.whose_turn(),
+        };
+        let credit = if perspective == leaf_player { value } else { 1.0 - value };
         let node = arena[id].get_mut();
         node.visits += 1;
-        node.value_sum += value;
-        current = arena[id].parent();
+        node.value_sum += credit;
+        current = parent;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     // Test implementations for testing
     #[derive(Debug, Clone, Default, PartialEq)]
@@ -525,14 +682,14 @@ mod tests {
         }
     }
 
-    struct TestRollout;
+    struct TestEstimator;
 
-    impl Rollout for TestRollout {
+    impl ValueEstimator for TestEstimator {
         type State = TestGameState;
         type ResponseGenerator = TestResponseGenerator;
 
-        fn play(&self, _state: &TestGameState, _rg: &TestResponseGenerator) -> f32 {
-            0.5 // Simple fixed rollout value for testing
+        fn estimate(&self, _state: &TestGameState, _rg: &TestResponseGenerator) -> f32 {
+            0.5 // Simple fixed estimate for testing
         }
     }
 
@@ -627,10 +784,10 @@ mod tests {
             terminal: false,
         };
         let generator = TestResponseGenerator;
-        let rollout = TestRollout;
+        let estimator = TestEstimator;
 
         // Test with minimal iterations
-        let result = search(&state, &generator, &rollout, 1.0, 1);
+        let result = search(&state, &generator, &estimator, 1.0, 0.0, false, 1);
         // Since we have actions available, should return Some action
         assert!(result.is_some());
     }
@@ -642,10 +799,10 @@ mod tests {
             terminal: true,
         };
         let generator = TestResponseGenerator;
-        let rollout = TestRollout;
+        let estimator = TestEstimator;
 
         // Terminal state should return None (no actions)
-        let result = search(&state, &generator, &rollout, 1.0, 10);
+        let result = search(&state, &generator, &estimator, 1.0, 0.0, false, 10);
         assert!(result.is_none());
     }
 
@@ -656,10 +813,10 @@ mod tests {
             terminal: false,
         };
         let generator = TestResponseGenerator;
-        let rollout = TestRollout;
+        let estimator = TestEstimator;
 
         // Zero iterations should still work
-        let result = search(&state, &generator, &rollout, 1.0, 0);
+        let result = search(&state, &generator, &estimator, 1.0, 0.0, false, 0);
         // Might return None or Some depending on implementation
         // Just verify it doesn't crash
         let _ = result;
@@ -672,11 +829,11 @@ mod tests {
             terminal: false,
         };
         let generator = TestResponseGenerator;
-        let rollout = TestRollout;
+        let estimator = TestEstimator;
 
         // Test with different exploration constants
-        let result1 = search(&state, &generator, &rollout, 0.1, 5);
-        let result2 = search(&state, &generator, &rollout, 2.0, 5);
+        let result1 = search(&state, &generator, &estimator, 0.1, 0.0, false, 5);
+        let result2 = search(&state, &generator, &estimator, 2.0, 0.0, false, 5);
 
         // Both should work (might return different results)
         assert!(result1.is_some() || state.terminal);
@@ -690,10 +847,10 @@ mod tests {
             terminal: false,
         };
         let generator = TestResponseGenerator;
-        let rollout = TestRollout;
+        let estimator = TestEstimator;
 
         // Test with multiple iterations
-        let result = search(&state, &generator, &rollout, 1.4, 50);
+        let result = search(&state, &generator, &estimator, 1.4, 0.0, false, 50);
 
         // Should return an action if state is not terminal
         if !state.terminal {
@@ -708,14 +865,255 @@ mod tests {
             terminal: false,
         };
         let generator = TestResponseGenerator;
-        let rollout = TestRollout;
+        let estimator = TestEstimator;
 
         // Multiple searches on same state should work
-        let result1 = search(&state, &generator, &rollout, 1.0, 10);
-        let result2 = search(&state, &generator, &rollout, 1.0, 10);
+        let result1 = search(&state, &generator, &estimator, 1.0, 0.0, false, 10);
+        let result2 = search(&state, &generator, &estimator, 1.0, 0.0, false, 10);
 
         // Both should return results (might be different due to randomness)
         assert!(result1.is_some());
         assert!(result2.is_some());
+    }
+
+    // Two-ply adversarial fixture: state ids form a fixed tree.
+    //   0 (Alice) -a0-> 1 (Bob) -a0-> 3 terminal, Alice-value 0.9
+    //                   1       -a1-> 4 terminal, Alice-value 0.1
+    //   0 (Alice) -a1-> 2 (Bob) -a0-> 5 terminal, Alice-value 0.5
+    //                   2       -a1-> 6 terminal, Alice-value 0.6
+    // Bob minimizes Alice's value: line a0 yields 0.1 for Alice, line a1 yields 0.5.
+    // Correct root choice is a1. Max-max selection chases the 0.9 leaf and picks a0.
+    #[derive(Debug, Clone, PartialEq)]
+    struct TwoPlyState {
+        id: u8,
+    }
+
+    impl State for TwoPlyState {
+        type Action = TwoPlyAction;
+
+        fn fingerprint(&self) -> u64 {
+            self.id as u64
+        }
+
+        fn whose_turn(&self) -> PlayerId {
+            match self.id {
+                1 | 2 => PlayerId::Bob,
+                _ => PlayerId::Alice,
+            }
+        }
+
+        fn is_terminal(&self) -> bool {
+            self.id >= 3
+        }
+
+        fn apply(&self, action: &TwoPlyAction) -> Self {
+            let id = match (self.id, action.id) {
+                (0, 0) => 1,
+                (0, 1) => 2,
+                (1, 0) => 3,
+                (1, 1) => 4,
+                (2, 0) => 5,
+                (2, 1) => 6,
+                _ => panic!("illegal action"),
+            };
+            Self { id }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct TwoPlyAction {
+        id: u8,
+    }
+
+    struct TwoPlyResponseGenerator;
+
+    impl ResponseGenerator for TwoPlyResponseGenerator {
+        type State = TwoPlyState;
+
+        fn generate(&self, state: &TwoPlyState) -> Vec<TwoPlyAction> {
+            if state.is_terminal() {
+                vec![]
+            } else {
+                vec![TwoPlyAction { id: 0 }, TwoPlyAction { id: 1 }]
+            }
+        }
+    }
+
+    struct TwoPlyEstimator;
+
+    impl ValueEstimator for TwoPlyEstimator {
+        type State = TwoPlyState;
+        type ResponseGenerator = TwoPlyResponseGenerator;
+
+        // [0,1] from the perspective of state.whose_turn(). Terminal states (ids 3-6)
+        // have Alice to move, so their exact Alice-values are returned as-is.
+        fn estimate(&self, state: &TwoPlyState, _rg: &TwoPlyResponseGenerator) -> f32 {
+            match state.id {
+                3 => 0.9,
+                4 => 0.1,
+                5 => 0.5,
+                6 => 0.6,
+                _ => 0.5, // non-terminal: neutral heuristic
+            }
+        }
+    }
+
+    #[test]
+    fn test_mcts_adversarial_bob_minimizes() {
+        let root = TwoPlyState { id: 0 };
+        let rg = TwoPlyResponseGenerator;
+        let estimator = TwoPlyEstimator;
+        let result = search(&root, &rg, &estimator, DEFAULT_EXPLORATION_CONSTANT, 0.0, false, 200);
+        assert_eq!(result, Some(TwoPlyAction { id: 1 }));
+    }
+
+    // Builds a bare node for direct UCT testing (state contents are irrelevant)
+    fn test_node(visits: u32, value_sum: f32, iv0: Option<f32>) -> Node<TestGameState> {
+        Node {
+            state: TestGameState {
+                value: 0,
+                terminal: false,
+            },
+            action: None,
+            untried_actions: vec![],
+            visits,
+            value_sum,
+            initial_value: iv0,
+        }
+    }
+
+    struct CountingEstimator {
+        calls: Cell<u32>,
+    }
+
+    impl ValueEstimator for CountingEstimator {
+        type State = TestGameState;
+        type ResponseGenerator = TestResponseGenerator;
+
+        fn estimate(&self, _state: &TestGameState, _rg: &TestResponseGenerator) -> f32 {
+            self.calls.set(self.calls.get() + 1);
+            0.5
+        }
+    }
+
+    #[test]
+    fn test_uct_initial_value_blend() {
+        let mut arena: Arena<Node<TestGameState>> = Arena::new();
+        let parent = arena.new_node(test_node(4, 0.0, None));
+        let unvisited = arena.new_node(test_node(0, 0.0, Some(0.8)));
+        parent.append(unvisited, &mut arena);
+        let visited = arena.new_node(test_node(2, 0.5, Some(0.8)));
+        parent.append(visited, &mut arena);
+        let c = 1.0;
+
+        // visits=0, v0=0.8, w=2: n_eff=2, Q=v0=0.8, UCT=0.8+sqrt(ln4/2)
+        let u = arena[unvisited].get().uct(unvisited, &arena, c, 2.0);
+        assert!((u - 1.632_554_6).abs() < 1e-4, "got {u}");
+
+        // visits=2, sum=0.5, v0=0.8, w=2: n_eff=4, Q=(0.5+1.6)/4=0.525, UCT=0.525+sqrt(ln4/4)
+        let u2 = arena[visited].get().uct(visited, &arena, c, 2.0);
+        assert!((u2 - 1.113_705).abs() < 1e-4, "got {u2}");
+
+        // Larger w pulls Q toward v0: w=6: n_eff=8, Q=(0.5+4.8)/8=0.6625, UCT=0.6625+sqrt(ln4/8)
+        let u3 = arena[visited].get().uct(visited, &arena, c, 6.0);
+        assert!((u3 - 1.078_777_3).abs() < 1e-4, "got {u3}");
+
+        // Q decays from pure v0 toward the observed mean as real visits accumulate:
+        // observed mean 0.25 < blended Q(w=2) 0.525 < v0 0.8
+        let q_w2 = 0.525_f32;
+        assert!(q_w2 > 0.25 && q_w2 < 0.8);
+    }
+
+    #[test]
+    fn test_uct_zero_weight_matches_legacy() {
+        let mut arena: Arena<Node<TestGameState>> = Arena::new();
+        let parent = arena.new_node(test_node(10, 0.0, None));
+        let child = arena.new_node(test_node(3, 1.2, Some(0.9)));
+        parent.append(child, &mut arena);
+        let c = std::f32::consts::SQRT_2;
+
+        // w = 0 must reproduce the legacy formula bit-for-bit even when an
+        // initial value is present
+        let expected = 1.2_f32 / 3.0 + c * ((10_f32).ln() / 3.0).sqrt();
+        assert_eq!(arena[child].get().uct(child, &arena, c, 0.0), expected);
+
+        // visits == 0 with w == 0 falls back to INFINITY even with an estimate
+        let unvisited = arena.new_node(test_node(0, 0.0, Some(0.9)));
+        parent.append(unvisited, &mut arena);
+        assert_eq!(arena[unvisited].get().uct(unvisited, &arena, c, 0.0), f32::INFINITY);
+
+        // visits == 0 with no estimate is INFINITY even with w > 0
+        let no_estimate = arena.new_node(test_node(0, 0.0, None));
+        parent.append(no_estimate, &mut arena);
+        assert_eq!(arena[no_estimate].get().uct(no_estimate, &arena, c, 2.0), f32::INFINITY);
+    }
+
+    #[test]
+    fn test_lazy_estimator_call_count() {
+        let state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
+        let generator = TestResponseGenerator;
+        let estimator = CountingEstimator { calls: Cell::new(0) };
+
+        // Lazy mode runs the estimator exactly once per iteration
+        let result = search(&state, &generator, &estimator, 1.0, 0.0, false, 25);
+        assert!(result.is_some());
+        assert_eq!(estimator.calls.get(), 25);
+    }
+
+    #[test]
+    fn test_eager_estimator_call_count() {
+        let state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
+        let generator = TestResponseGenerator;
+        let estimator = CountingEstimator { calls: Cell::new(0) };
+
+        // Within 5 iterations no terminal state is reachable, so every iteration
+        // selects a childless node with 2 untried actions: eager mode makes exactly
+        // one estimator call per created child = 2 per iteration.
+        let result = search(&state, &generator, &estimator, 1.0, 0.5, true, 5);
+        assert!(result.is_some());
+        assert_eq!(estimator.calls.get(), 10);
+    }
+
+    #[test]
+    fn test_eager_expansion_invariants() {
+        let generator = TestResponseGenerator;
+        let estimator = TestEstimator;
+        let context = Context {
+            response_generator: &generator,
+            estimator: &estimator,
+            c: 1.0,
+            initial_value_weight: 0.5,
+            estimate_on_expansion: true,
+        };
+        let mut arena: Arena<Node<TestGameState>> = Arena::new();
+        let root_state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
+        let root_id = arena.new_node(Node::new(root_state, None, &generator));
+        arena.get_mut(root_id).unwrap().get_mut().visits = 1;
+
+        let (chosen_id, raw) = expand_eager(root_id, &mut arena, &context).unwrap();
+        back_propagate(chosen_id, &mut arena, raw);
+
+        // Parent is fully expanded after ONE eager expansion
+        assert!(arena[root_id].get().fully_expanded());
+        let children: Vec<NodeId> = root_id.children(&arena).collect();
+        assert_eq!(children.len(), 2);
+        // Every child has a stored initial value
+        for &child in &children {
+            assert!(arena[child].get().initial_value.is_some());
+        }
+        // Exactly one child (the chosen one) was visited; siblings were not
+        // back-propagated
+        assert_eq!(children.iter().filter(|&&id| arena[id].get().visits == 1).count(), 1);
+        assert_eq!(children.iter().filter(|&&id| arena[id].get().visits == 0).count(), 1);
+        assert_eq!(arena[chosen_id].get().visits, 1);
     }
 }

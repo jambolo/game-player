@@ -11,7 +11,9 @@ The game-player crate provides the core traits and search components needed to b
 It provides:
 
 1. A min-max game tree search algorithm using alpha-beta pruning and transposition tables for optimal performance.
-2. A basic Monte Carlo Tree Search algorithm.
+2. A Monte Carlo Tree Search algorithm with UCT-based selection, pluggable value estimation
+   (`ValueEstimator` — random playouts, static evaluation, or any other strategy), configurable
+   initial-value weighting, and eager or lazy child expansion.
 
 ## Documentation
 
@@ -19,7 +21,3 @@ It provides:
   explanation of the minimax search, and a walkthrough of a complete tic-tac-toe player.
 - **API reference** — `cargo doc --open`.
 - **Runnable example** — [examples/tic_tac_toe.rs](examples/tic_tac_toe.rs), via `cargo run --example tic_tac_toe`.
-
-## Future Development
-
-- Monte Carlo Tree Search (MCTS) with UCT-based node selection
