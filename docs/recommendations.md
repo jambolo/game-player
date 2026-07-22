@@ -128,8 +128,15 @@ treated as distinct nodes").
 
 * [ ] Ship a built-in `StaticEvaluator` → `ValueEstimator` adapter. The perspective-flip/normalization formula is
   currently hand-duplicated in four places (mcts.rs:163-167, static_evaluator.rs:14-16, CLAUDE.md, lib.rs:241-247).
-* [ ] Ship a built-in random-playout estimator (module docs mention rollout as a strategy, mcts.rs:6-7, but none
-  ships). Would need `rand` as a new, feature-gated dependency.
+* [x] Ship a built-in random-playout estimator (module docs mention rollout as a strategy, mcts.rs:6-7, but none
+  ships). Would need `rand` as a new, feature-gated dependency. — **Done:** `random_playout::RandomPlayoutEstimator<G>`,
+  gated behind the new `mcts_random_playout` feature (`dep:rand`, default-off) so consumers supplying their own
+  estimator aren't forced to pull in `rand`. Samples a uniformly-random action from `rg.generate(state)` and applies
+  it until terminal. Since a generic `State` has no way to read off "who won," this also introduces a new
+  `TerminalOutcome: State` trait (`fn outcome(&self) -> f32`, same `[0.0, 1.0]`/current-player-perspective contract as
+  `ValueEstimator`) that `G::State` must implement for the estimator to be usable. The estimator owns a seeded
+  `StdRng` (`RandomPlayoutEstimator::new(seed)`) behind a `RefCell` so playouts stay reproducible despite
+  `estimate(&self, ...)`'s `&self` signature.
 * [ ] Add a batched `estimate_batch()` hook (default: maps `estimate()`) so `expand_eager`'s per-child loop
   (mcts.rs:596-610) can be overridden for NN-style vectorized inference.
 * [ ] Memoize `estimate()` via the transposition table above — same mechanism as the TT item, but framed as the

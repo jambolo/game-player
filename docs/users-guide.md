@@ -11,6 +11,7 @@ worked example, using tic-tac-toe as the game.
 - [Choosing a Search Algorithm](#choosing-a-search-algorithm)
 - [The Minimax Algorithm](#the-minimax-algorithm)
 - [The MCTS Algorithm](#the-mcts-algorithm)
+  - [The built-in `RandomPlayoutEstimator`](#the-built-in-randomplayoutestimator)
 - [Example: A Tic-Tac-Toe Player Using Minimax](#example-a-tic-tac-toe-player-using-minimax)
 - [Example: A Tic-Tac-Toe Player Using MCTS](#example-a-tic-tac-toe-player-using-mcts)
 - [Where to Go From Here](#where-to-go-from-here)
@@ -234,6 +235,65 @@ start with something cheap and swap in something stronger later.
 If you already have an Alice-perspective `StaticEvaluator`, you can adapt it: normalize its output into `[0.0, 1.0]` with
 `v01 = (eval - bob_wins_value()) / (alice_wins_value() - bob_wins_value())`, then return `v01` when `whose_turn()` is Alice
 and `1.0 - v01` when it is Bob. The MCTS example below does exactly this.
+
+### The built-in `RandomPlayoutEstimator`
+
+Writing the classic rollout estimator by hand is repetitive enough that the crate ships one:
+`game_player::random_playout::RandomPlayoutEstimator<G>`. It repeatedly samples a uniformly-random action from
+`rg.generate(state)` and applies it until the state is terminal, then reports the result — exactly the "play random legal
+moves until the game ends" strategy described above.
+
+It is behind the `mcts_random_playout` feature flag, off by default, because it needs a random number generator and the crate
+does not want to force a `rand` dependency onto callers who bring their own estimator (a static evaluation or a neural
+network, say — the common case). Enable it in `Cargo.toml`:
+
+```toml
+game-player = { version = "...", features = ["mcts_random_playout"] }
+```
+
+Two things to know before using it:
+
+- **Your state needs one more trait.** `State` only exposes `is_terminal()` — it has no generic way to say *who* won, which a
+  playout needs to know once it reaches the end. So `RandomPlayoutEstimator` requires `G::State` to also implement
+  `random_playout::TerminalOutcome`, a single-method trait:
+
+  ```rust
+  trait TerminalOutcome: State {
+      /// Same contract as `ValueEstimator::estimate` on a terminal state: [0.0, 1.0] from the
+      /// perspective of `self.whose_turn()`. Only ever called when `is_terminal()` is true.
+      fn outcome(&self) -> f32;
+  }
+  ```
+
+  For tic-tac-toe this is a small addition to `Board`:
+
+  ```rust
+  use game_player::random_playout::TerminalOutcome;
+
+  impl TerminalOutcome for Board {
+      fn outcome(&self) -> f32 {
+          match self.winner() {
+              Some(winner) if winner == self.whose_turn() => 1.0,
+              Some(_) => 0.0,
+              None => 0.5, // Draw (is_full()).
+          }
+      }
+  }
+  ```
+
+- **It carries its own RNG, seeded for reproducibility.** Construct it with `RandomPlayoutEstimator::new(seed)`; the same
+  seed and the same sequence of `estimate()` calls always produce the same playouts, so a search built on it stays
+  reproducible run to run (as long as it isn't shared across concurrent searches).
+
+Putting it together, in place of a hand-written `LinesEstimator`:
+
+```rust
+use game_player::random_playout::RandomPlayoutEstimator;
+
+let estimator = RandomPlayoutEstimator::<MctsMoves>::new(42);
+```
+
+The rest of the search call is unchanged — `estimator` still just needs to satisfy `mcts::ValueEstimator`.
 
 ### How MCTS stays adversarial
 
@@ -561,7 +621,9 @@ impl mcts::ResponseGenerator for MctsMoves {
 ### The value estimator
 
 The classic MCTS estimator is a random playout: play random legal moves (via the `rg` argument) until the game ends, and
-report the outcome. Here we instead demonstrate adapting the *lines* heuristic from the minimax evaluator, following the
+report the outcome. The crate ships one — see
+[The built-in `RandomPlayoutEstimator`](#the-built-in-randomplayoutestimator) — but it lives behind an off-by-default feature
+flag and needs an RNG, so here we instead demonstrate adapting the *lines* heuristic from the minimax evaluator, following the
 recipe in [the `ValueEstimator` contract](#the-valueestimator-contract): compute the Alice-perspective score, rescale it into
 `[0.0, 1.0]`, and flip it when it is Bob's turn. This also makes the example fully deterministic — no RNG anywhere.
 
@@ -682,5 +744,7 @@ To adapt these patterns to your own game:
    always from Alice's perspective and always within `[bob_wins_value(), alice_wins_value()]`; then tune `max_depth` to your
    time budget.
 4. For **MCTS**: write an estimator that returns `[0.0, 1.0]` from the current player's perspective — start with a random
-   playout or a rescaled static evaluation and swap in something stronger later; then tune `max_iterations` to your time
-   budget, and reach for `initial_value_weight`/`estimate_on_expansion` once you have a cheap estimator worth trusting.
+   playout (the crate ships one behind the `mcts_random_playout` feature; see
+   [The built-in `RandomPlayoutEstimator`](#the-built-in-randomplayoutestimator)) or a rescaled static evaluation, and swap in
+   something stronger later; then tune `max_iterations` to your time budget, and reach for
+   `initial_value_weight`/`estimate_on_expansion` once you have a cheap estimator worth trusting.

@@ -295,6 +295,8 @@
 
 pub mod mcts;
 pub mod minimax;
+#[cfg(feature = "mcts_random_playout")]
+pub mod random_playout;
 pub mod state;
 pub mod static_evaluator;
 pub mod transposition_table;
