@@ -22,6 +22,8 @@
 //! # Notes
 //! - The search assumes a two-player zero-sum game with perfect information.
 //! - A transposition table is created internally for each search and caches the values of previously evaluated states.
+//! - The search never calls [`State::is_terminal`]; it treats an empty result from [`ResponseGenerator::generate`] as the
+//!   sole, definitive signal that a state ends the game. See the policy documented on that method.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -80,8 +82,8 @@ where
 /// ```
 ///
 /// # Implementation Notes
-/// - Return an empty vector from `generate` if no moves are available (player cannot respond)
-/// - If passing is allowed in the game, include a "pass" action as a valid response when appropriate
+/// - Return an empty vector from `generate` if and only if `state` is terminal (see the policy on [`generate`](Self::generate)
+///   below) - otherwise, always return at least one action, adding a "pass" action if the game forces one.
 /// - The depth parameter can be used for depth-dependent move generation optimizations.
 pub trait ResponseGenerator {
     /// The type representing game states that this generator works with
@@ -97,7 +99,7 @@ pub trait ResponseGenerator {
     /// * `depth` - Current search depth (ply number), useful for optimizations
     ///
     /// # Returns
-    /// A vector of actions representing all possible moves, or an empty vector if no moves are available. The search will call
+    /// A vector of actions representing all possible moves, or an empty vector if `state` is terminal. The search will call
     /// `state.apply(&action)` on each returned action to obtain the resulting state.
     ///
     /// # Examples
@@ -109,16 +111,21 @@ pub trait ResponseGenerator {
     /// println!("Found {} possible moves", actions.len());
     /// ```
     ///
-    /// # Notes
-    /// - If passing or resigning is allowed in the game, then the implementer should include a "pass" or "resign" action as a valid
-    ///   response when appropriate.
-    /// - Returning no actions indicates that the player cannot respond. It does not necessarily indicate that the game is over or
-    ///   that the player has passed. If no actions are returned, the value of the given state is set by the static evaluation
-    ///   function.
-    /// - If a player has no valid moves and that forces a pass, then the returned actions should include a "pass" action instead of
-    ///   returning no actions. If a player has no valid moves and that forces a resignation, then the returned actions can include
-    ///   a "resign" action instead of returning no actions, or it can return no actions and then the static evaluation function
-    ///   must detect the resignation condition and assign the opponent's win value to the given state.
+    /// # Policy: Empty Result Means Terminal
+    /// [`search`] never calls [`State::is_terminal`] itself: it treats an empty result from `generate` as the sole and
+    /// definitive signal that `state` concludes the game, and uses the state's static-evaluator value as the final result for
+    /// that line without searching further. Consequently:
+    /// - `generate` must return **at least one action** whenever `state.is_terminal()` is `false`. If the rules force a player
+    ///   to skip a turn - no legal move exists, but play continues - return an explicit "pass" action instead of an empty
+    ///   vector; `apply`-ing it typically just changes `whose_turn()` and leaves the rest of the state unchanged.
+    /// - `generate` must return **no actions** when `state.is_terminal()` is `true`. A forced resignation ends the game
+    ///   immediately, so it belongs here too: make `is_terminal()` `true` for that state rather than returning a "resign"
+    ///   action, and let the static evaluator assign the opponent's win value.
+    ///
+    /// Violating this - e.g. returning `[]` for a merely-stuck-but-ongoing position - is not rejected by the type system; it
+    /// silently makes the search treat that position as final, using whatever static value it already has instead of looking
+    /// further ahead. [`search`] runs a debug assertion after every call to `generate` that catches a state where the result's
+    /// emptiness disagrees with `state.is_terminal()`, so a violation panics immediately in a debug or test build.
     fn generate(&self, state: &Self::State, depth: u32) -> Vec<<Self::State as State>::Action>;
 }
 
@@ -139,8 +146,9 @@ pub trait ResponseGenerator {
 /// * `max_depth` - Maximum search depth in plies
 ///
 /// # Returns
-/// `Some(S::Action)` containing the best action to take, or `None` if no valid moves exist. Callers who need the resulting state
-/// can derive it with `s0.apply(&action)`.
+/// `Some(S::Action)` containing the best action to take, or `None` if `rg` returns no actions for `s0` (i.e. `s0` is terminal -
+/// see the policy documented on [`ResponseGenerator::generate`]). Callers who need the resulting state can derive it with
+/// `s0.apply(&action)`.
 ///
 /// # Examples
 ///
@@ -234,7 +242,9 @@ where
     // Generate a list of the candidate responses to this state. The candidates are initialized with preliminary values.
     let mut candidates = generate_candidates(context, state, depth);
 
-    // If there are no candidates, return without a response. It's up to the caller to decide how to handle this case.
+    // Per policy (see ResponseGenerator::generate), an empty candidate list is the definitive signal that `state` is
+    // terminal: there is no response to return, and it's up to the caller to read off the outcome (e.g. from the static
+    // evaluator's value for `state`, or a game-specific outcome trait).
     if candidates.is_empty() {
         return None;
     }
@@ -265,8 +275,9 @@ where
         //    from the result of a previous search stored in the transposition table.
         // 3. The search has reached its maximum depth.
         if !is_winning_value(value) && depth < context.max_depth && quality < this_quality {
-            // Update the value by evaluating the opponent's responses. If the opponent has no response, leave the value and quality
-            // as is.
+            // Update the value by evaluating the opponent's responses. A `None` here means candidate.state is terminal (per
+            // policy), so the preliminary value already IS the state's final value - the static evaluator's contract requires
+            // it to be the exact win/loss value for a terminal state - and is kept as-is with no further lookahead needed.
             if let Some(response) = search_recursive(context, &candidate.state, alpha, beta, depth + 1, player.other()) {
                 value = response.value;
                 quality = response.quality;
@@ -348,6 +359,14 @@ where
     R: ResponseGenerator<State = S>,
 {
     let actions = context.rg.generate(state.as_ref(), depth);
+    // Enforce the ResponseGenerator::generate policy: no actions if and only if the state is terminal. A violation here
+    // would otherwise be silently (mis)treated as the state being terminal - see the policy docs on `generate` for why that
+    // matters.
+    debug_assert_eq!(
+        actions.is_empty(),
+        state.is_terminal(),
+        "ResponseGenerator::generate must return no actions if and only if the state is terminal (policy violation)"
+    );
     actions
         .into_iter()
         .map(|action| {

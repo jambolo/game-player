@@ -5,8 +5,11 @@
 //! The Evaluation phase runs a `ValueEstimator`, which returns a value in `[0.0, 1.0]` from the perspective of the current
 //! player (`state.whose_turn()`), with terminal states returning the exact outcome (0.0 loss, 1.0 win, 0.5 draw); random
 //! playout to a terminal state is one possible estimator strategy among others, such as a static evaluation function or a
-//! neural network. The module is designed to be generic and works with any game state that implements the `State` trait,
-//! along with the `ResponseGenerator` and `ValueEstimator` traits.
+//! neural network. The boundary values `0.0` and `1.0` are reserved for a certain outcome - a terminal state, or a rollout
+//! that reached one - and a heuristic that stops short of the end of the game should stay strictly inside that range even
+//! when very confident (see the policy documented on `ValueEstimator::estimate`). The module is designed to be generic and
+//! works with any game state that implements the `State` trait, along with the `ResponseGenerator` and `ValueEstimator`
+//! traits.
 //!
 //! Node statistics (`value_sum`, `initial_value`) are stored from the perspective of the player who chose the action leading
 //! into the node — that is, the `whose_turn()` of the parent node's state, meaning "wins for the player who just moved". This
@@ -50,6 +53,9 @@
 //! - Unlike `minimax::search`, which takes a `max_depth`, MCTS spends a fixed `max_iterations` budget regardless of
 //!   how deep any particular line goes.
 //! - No transposition table is used: states reached by different move orders are treated as distinct nodes.
+//! - The search never calls [`State::is_terminal`]; it treats an empty result from [`ResponseGenerator::generate`] as the
+//!   sole, definitive signal that a state ends the game, since a node whose `generate` returns no actions can never gain
+//!   children. See the policy documented on that method.
 
 use crate::state::*;
 use indextree::{Arena, NodeId};
@@ -92,13 +98,27 @@ pub trait ResponseGenerator {
     /// * `state` - state to respond to
     ///
     /// # Returns
-    /// List of all possible legal actions for the given state.
+    /// List of all possible legal actions for the given state, or an empty vector if `state` is terminal.
     ///
     /// # Notes
     /// - All returned actions must be legal in the provided state.
     /// - The order of actions is not significant unless required by the implementation.
-    /// - Returning no actions indicates that the player cannot respond. It does not necessarily indicate that the game is
-    ///   over or that the player has passed. If passing is allowed, then a pass must be a valid action.
+    ///
+    /// # Policy: Empty Result Means Terminal
+    /// [`search`] never calls [`State::is_terminal`] itself: it treats an empty result from `generate` as the sole and
+    /// definitive signal that `state` concludes the game (a node whose `generate` returns no actions never gains children,
+    /// so it is repeatedly re-evaluated as a leaf instead of expanded). Consequently:
+    /// - `generate` must return **at least one action** whenever `state.is_terminal()` is `false`. If the rules force a
+    ///   player to skip a turn - no legal move exists, but play continues - return an explicit "pass" action instead of an
+    ///   empty vector; `apply`-ing it typically just changes `whose_turn()` and leaves the rest of the state unchanged.
+    /// - `generate` must return **no actions** when `state.is_terminal()` is `true`. A forced resignation ends the game
+    ///   immediately, so it belongs here too: make `is_terminal()` `true` for that state rather than returning a "resign"
+    ///   action.
+    ///
+    /// Violating this - e.g. returning `[]` for a merely-stuck-but-ongoing position - is not rejected by the type system; it
+    /// silently makes the search treat that position as final, using whatever value the `ValueEstimator` already assigned it
+    /// instead of expanding further. [`search`] runs a debug assertion when a node is created that catches a state where the
+    /// result's emptiness disagrees with `state.is_terminal()`, so a violation panics immediately in a debug or test build.
     fn generate(&self, state: &Self::State) -> Vec<<Self::State as State>::Action>;
 }
 
@@ -160,11 +180,21 @@ pub trait ValueEstimator {
     /// # Returns
     /// [0.0, 1.0] value estimate from the perspective of `state.whose_turn()`.
     ///
+    /// # Reserve 0.0 and 1.0 for Certainty
+    /// The exact boundary values mean "this outcome is certain," so reserve them for cases where it actually is: a
+    /// terminal state's exact outcome, or a rollout that played out to a terminal state (the classic MCTS rollout). A
+    /// heuristic that stops short of the end of the game - a static evaluation, a partial-depth lookahead, a neural
+    /// network's confidence score - is an opinion, not a proof, and should stay strictly inside `(0.0, 1.0)` even when
+    /// very confident (e.g. clamp just shy of the boundary). Otherwise a merely strong-looking non-terminal position
+    /// becomes indistinguishable, in the search's accumulated statistics, from one that is actually won or lost.
+    ///
     /// # Adapting a StaticEvaluator
     /// An Alice-perspective `StaticEvaluator` can be wrapped to implement this trait by
     /// normalizing its output into `[0.0, 1.0]` and then flipping perspective for Bob: compute
     /// `v01 = (eval - bob_wins_value()) / (alice_wins_value() - bob_wins_value())`, then return
-    /// `v01` when `state.whose_turn()` is Alice, or `1.0 - v01` when it is Bob.
+    /// `v01` when `state.whose_turn()` is Alice, or `1.0 - v01` when it is Bob. This naturally respects the
+    /// certainty-reservation above as long as the wrapped `StaticEvaluator` respects its own contract of returning
+    /// `alice_wins_value()`/`bob_wins_value()` only for an actual win, never as a heuristic's high-confidence guess.
     fn estimate(&self, state: &Self::State, rg: &Self::ResponseGenerator) -> f32;
 }
 
@@ -238,6 +268,14 @@ where
         G: ResponseGenerator<State = S>,
     {
         let untried_actions = rg.generate(&state);
+        // Enforce the ResponseGenerator::generate policy: no actions if and only if the state is terminal. A violation
+        // here would otherwise be silently (mis)treated as the state being terminal - see the policy docs on `generate`
+        // for why that matters.
+        debug_assert_eq!(
+            untried_actions.is_empty(),
+            state.is_terminal(),
+            "ResponseGenerator::generate must return no actions if and only if the state is terminal (policy violation)"
+        );
         Self {
             state,
             action,
@@ -345,7 +383,8 @@ where
 ///
 /// # Returns
 /// Some(best_action) containing the action leading to the child of the root node with the most visits (most promising move),
-/// or None if the root state has no possible actions.
+/// or None if `rg` returns no actions for `s0` (i.e. `s0` is terminal - see the policy documented on
+/// [`ResponseGenerator::generate`]).
 ///
 /// # Panics
 /// This function will panic if the UCT function ever returns NaN.
@@ -382,7 +421,7 @@ where
 ///
 /// The search repeats four phases each iteration:
 /// - **Selection**: Descend from the root by a plain argmax of UCT at every level, stopping at a node that is not
-///   fully expanded, has no children, or is terminal.
+///   fully expanded or has no children (which includes every terminal node, per the `ResponseGenerator::generate` policy).
 /// - **Expansion**: Add one untried child (lazy, the default), or every untried child at once (eager, when
 ///   `estimate_on_expansion` is `true`).
 /// - **Evaluation**: Run the `ValueEstimator` on the newly expanded (or terminal) state.
@@ -480,21 +519,24 @@ where
 }
 
 // Helper function that determines if the node should be selected for expansion.
-// A node is selectable if it is not fully expanded, has no children, or represents a terminal game state.
+// A node is selectable if it is not fully expanded or has no children. A terminal node (per the
+// ResponseGenerator::generate policy, one whose generator returned no actions) is always covered by the
+// `!has_children` case without needing a separate `state.is_terminal()` check: `Node::new` populates
+// `untried_actions` from the same `generate` call, so a terminal node starts (and, since `expand` only ever pops
+// from `untried_actions`, remains) fully expanded with zero children.
 fn selectable<S>(node_id: NodeId, arena: &Arena<Node<S>>) -> bool
 where
     S: State,
 {
     let has_children = node_id.children(arena).count() > 0;
-    let node = arena[node_id].get();
-    !node.fully_expanded() || !has_children || node.state.is_terminal()
+    !arena[node_id].get().fully_expanded() || !has_children
 }
 
 // Selects the best node for expansion using the UCT value
 //
 // This method traverses the tree from the given node downward, selecting the child with the highest UCT value at each step
-// until it reaches a node that is either not fully expanded, has no children, or represents a terminal game state. That node is
-// returned.
+// until it reaches a node that is either not fully expanded or has no children (a terminal node always qualifies via the
+// latter - see `selectable`). That node is returned.
 //
 // # Arguments
 // * `node_id` - The starting node for selection (typically the root)
@@ -514,7 +556,7 @@ where
 
     // Traverse the tree until a selectable node is found
     // If a node is not fully expanded, then select it for expansion.
-    // If a node is terminal or has no children, then select it for evaluation.
+    // If a node has no children (which includes every terminal node), then select it for evaluation.
     // Otherwise, descend to the child with the highest UCT value and continue.
     while !selectable(selected, arena) {
         let children: Vec<NodeId> = selected.children(arena).collect();
@@ -534,7 +576,10 @@ where
 
 // Expands a node by adding a child for one of its untried actions and returns the new child node
 //
-// If the node is fully expanded (no untried actions remain) or represents a terminal game state, this function returns None.
+// If the node is fully expanded (no untried actions remain), this function returns None. A terminal node (per the
+// ResponseGenerator::generate policy) is always in this state: `Node::new` populates `untried_actions` from the same
+// `generate` call, so a terminal node starts - and, since nothing but this function ever removes from
+// `untried_actions`, remains - empty.
 //
 // # Arguments
 // * `node_id` - The node to expand
@@ -1626,5 +1671,112 @@ mod tests {
                 "failed for estimate_on_expansion={eager}, initial_value_weight={w}"
             );
         }
+    }
+
+    // A player with no real legal moves must still return an action (e.g. a "pass") rather than an empty vector,
+    // per the crate's no-legal-moves policy: an empty result is treated by the search as a definitive signal that
+    // the state is terminal. This fixture extends TwoPlyState with a forced pass between the root and one of Bob's
+    // branches:
+    //   0 (Alice) -a0-> 1 (Bob, single action "pass") -> 2 (Alice) -a0-> 4 terminal, Alice-value 0.9
+    //                                                              -a1-> 5 terminal, Alice-value 0.2
+    //   0 (Alice) -a1-> 3 (Bob, real choice)          -a0-> 6 terminal, Alice-value 0.9
+    //                                                  -a1-> 7 terminal, Alice-value 0.6
+    // Bob at node 1 has no say (forced pass), so Alice picks max(0.9, 0.2) = 0.9 for that branch. Bob at node 3
+    // minimizes between 0.9 and 0.6, picking 0.6. The root must therefore prefer the forced-pass branch (a0):
+    // if the search instead treated node 1 as a dead end and stopped there, it would use the neutral 0.5
+    // heuristic value assigned to non-terminal states and could easily prefer the wrong branch.
+    #[derive(Debug, Clone, PartialEq)]
+    struct ForcedPassState {
+        id: u8,
+    }
+
+    impl State for ForcedPassState {
+        type Action = ForcedPassAction;
+
+        fn fingerprint(&self) -> u64 {
+            self.id as u64
+        }
+
+        fn whose_turn(&self) -> PlayerId {
+            match self.id {
+                1 | 3 => PlayerId::Bob,
+                _ => PlayerId::Alice,
+            }
+        }
+
+        fn is_terminal(&self) -> bool {
+            self.id >= 4
+        }
+
+        fn apply(&self, action: &ForcedPassAction) -> Self {
+            let id = match (self.id, action.id) {
+                (0, 0) => 1,
+                (0, 1) => 3,
+                (1, 0) => 2, // the forced pass
+                (2, 0) => 4,
+                (2, 1) => 5,
+                (3, 0) => 6,
+                (3, 1) => 7,
+                _ => panic!("illegal action"),
+            };
+            Self { id }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct ForcedPassAction {
+        id: u8,
+    }
+
+    struct ForcedPassResponseGenerator;
+
+    impl ResponseGenerator for ForcedPassResponseGenerator {
+        type State = ForcedPassState;
+
+        fn generate(&self, state: &ForcedPassState) -> Vec<ForcedPassAction> {
+            match state.id {
+                id if id >= 4 => vec![],
+                1 => vec![ForcedPassAction { id: 0 }], // no real move: must still return the pass
+                _ => vec![ForcedPassAction { id: 0 }, ForcedPassAction { id: 1 }],
+            }
+        }
+    }
+
+    struct ForcedPassEstimator;
+
+    impl ValueEstimator for ForcedPassEstimator {
+        type State = ForcedPassState;
+        type ResponseGenerator = ForcedPassResponseGenerator;
+
+        fn estimate(&self, state: &ForcedPassState, _rg: &ForcedPassResponseGenerator) -> f32 {
+            match state.id {
+                4 => 0.9,
+                5 => 0.2,
+                6 => 0.9,
+                7 => 0.6,
+                _ => 0.5,
+            }
+        }
+    }
+
+    #[test]
+    fn test_mcts_forced_pass_is_explored_not_treated_as_terminal() {
+        let root = ForcedPassState { id: 0 };
+        let rg = ForcedPassResponseGenerator;
+        let estimator = ForcedPassEstimator;
+        let result = search(&root, &rg, &estimator, DEFAULT_EXPLORATION_CONSTANT, 0.0, false, 3000);
+        assert_eq!(result, Some(ForcedPassAction { id: 0 })); // prefers the forced-pass branch
+    }
+
+    // A non-terminal state whose generator (in violation of the crate's no-legal-moves policy) returns no actions
+    // must be caught immediately by `Node::new`'s debug assertion, rather than silently mistreated as terminal.
+    #[test]
+    #[should_panic(expected = "ResponseGenerator::generate must return no actions if and only if the state is terminal")]
+    fn test_policy_violation_panics_in_debug_builds() {
+        let state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
+        let _ = Node::new(state, None, &EmptyResponseGenerator);
     }
 }

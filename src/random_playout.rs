@@ -3,6 +3,11 @@
 //! Requires the `mcts_random_playout` feature, since it pulls in `rand` as a dependency - a cost that
 //! callers supplying their own [`ValueEstimator`](crate::mcts::ValueEstimator) (the common case for
 //! static-evaluator-driven or neural-network-driven MCTS) should not have to pay.
+//!
+//! Playouts here rely on the same policy as the searches: a [`ResponseGenerator`] must return at least one action
+//! for any state where [`State::is_terminal`] is `false` (see the policy documented on
+//! [`ResponseGenerator::generate`]). Unlike the searches, a playout has no graceful fallback for a violation - there
+//! is no action to apply - so [`RandomPlayoutEstimator::estimate`] panics unconditionally if it happens.
 
 use crate::mcts::{ResponseGenerator, ValueEstimator};
 use crate::state::State;
@@ -68,13 +73,14 @@ where
                     1.0 - outcome
                 };
             }
+            // Per the crate's policy (see mcts::ResponseGenerator::generate), a non-terminal state must always
+            // yield at least one action - a "pass" if the rules force one - so an empty result here is a policy
+            // violation in the caller's ResponseGenerator, not a legitimate end of the playout.
             let actions = rg.generate(&current);
-            match actions.choose(&mut *rng) {
-                Some(action) => current = current.apply(action),
-                // No legal actions from a non-terminal state: nothing left to simulate:
-                // treat it as a draw rather than looping or panicking.
-                None => return 0.5,
-            }
+            let action = actions
+                .choose(&mut *rng)
+                .expect("ResponseGenerator::generate returned no actions for a non-terminal state (policy violation)");
+            current = current.apply(action);
         }
     }
 }

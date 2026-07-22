@@ -57,8 +57,12 @@ impl State for MockGameState {
         self.id as u64
     }
 
+    // Per the crate's policy (see minimax::ResponseGenerator::generate), a state is terminal if and only if its
+    // response generator would return no actions - which, for MockResponseGenerator, happens exactly when `children`
+    // is empty. `value` is unrelated to terminality: it is just a shortcut MockStaticEvaluator uses to read off a
+    // leaf's static value directly instead of looking it up by id.
     fn is_terminal(&self) -> bool {
-        self.children.is_empty() && self.value.is_some()
+        self.children.is_empty()
     }
 
     fn apply(&self, action: &MockAction) -> Self {
@@ -137,9 +141,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_search_returns_none_for_no_moves() {
+    fn test_search_returns_none_for_terminal_root() {
         let evaluator = MockStaticEvaluator::new();
         let generator = MockResponseGenerator::new();
+        // No children => terminal (per the policy), so the generator correctly returns no actions.
         let state = MockGameState::new(1, PlayerId::Alice);
 
         let result = search(&evaluator, &generator, &state, 3);
@@ -191,9 +196,9 @@ mod tests {
         let state2 = MockGameState::new(2, PlayerId::Bob).with_value(5.0);
         let state3 = MockGameState::new(3, PlayerId::Alice).with_children(vec![4]);
 
-        assert!(!state1.is_terminal()); // No children, no value
-        assert!(state2.is_terminal()); // Has value, no children
-        assert!(!state3.is_terminal()); // Has children
+        assert!(state1.is_terminal()); // No children: terminal by policy, regardless of `value`
+        assert!(state2.is_terminal()); // No children: terminal (its `value` is just a static-eval shortcut)
+        assert!(!state3.is_terminal()); // Has children: not terminal
     }
 
     #[test]
@@ -471,5 +476,55 @@ mod tests {
         let result = search(&evaluator, &generator, &state, 3);
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, 2);
+    }
+
+    /// A player with no real legal moves must still return an action (e.g. a "pass") rather than an empty vector,
+    /// per the crate's no-legal-moves policy: an empty result is treated by the search as a definitive signal that
+    /// the state is terminal. This builds a branch where Bob is forced to pass (his only legal action) into a
+    /// state where Alice then has a real choice, and checks that the search recurses through the pass to find
+    /// Alice's true best reply (9.0) rather than stopping there and trusting state 1's own, deliberately
+    /// misleading, static value of -50.0.
+    ///
+    /// Tree:
+    ///   Alice(0) → Bob(1) [SEF=-50, not terminal: forced to pass] → Alice(2) → leaves 9.0, 2.0
+    ///   Alice(0) → Bob(3) [real choice]                                     → leaves 9.0, 1.0
+    ///
+    /// Via the pass branch, Alice ends up choosing between 9.0 and 2.0 herself (Bob had no say): 9.0.
+    /// Via the real-choice branch, Bob minimizes between 9.0 and 1.0: 1.0.
+    /// Alice must prefer the pass branch (9.0 > 1.0) - the opposite of what she'd pick if the search wrongly
+    /// trusted state 1's raw static value of -50.0 instead of exploring the forced pass.
+    #[test]
+    fn test_forced_pass_is_explored_not_treated_as_terminal() {
+        let evaluator = MockStaticEvaluator::new();
+
+        let generator = MockResponseGenerator::new()
+            .add_state(MockGameState::new(0, PlayerId::Alice).with_children(vec![1, 3]))
+            .add_state(MockGameState::new(1, PlayerId::Bob).with_value(-50.0).with_children(vec![2])) // forced pass
+            .add_state(MockGameState::new(2, PlayerId::Alice).with_children(vec![10, 11]))
+            .add_state(MockGameState::new(10, PlayerId::Alice).with_value(9.0))
+            .add_state(MockGameState::new(11, PlayerId::Alice).with_value(2.0))
+            .add_state(MockGameState::new(3, PlayerId::Bob).with_children(vec![4, 5]))
+            .add_state(MockGameState::new(4, PlayerId::Alice).with_value(9.0))
+            .add_state(MockGameState::new(5, PlayerId::Alice).with_value(1.0));
+
+        let state = MockGameState::new(0, PlayerId::Alice).with_children(vec![1, 3]);
+
+        let result = search(&evaluator, &generator, &state, 4);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().id, 1); // Alice prefers the forced-pass branch
+    }
+
+    /// A non-terminal state whose generator (in violation of the crate's no-legal-moves policy) returns no actions
+    /// must be caught immediately by the search's debug assertion, rather than silently mistreated as terminal.
+    /// State 1 declares a child (so it is not terminal), but that child was never registered with the generator, so
+    /// `generate` resolves to an empty vector for it.
+    #[test]
+    #[should_panic(expected = "ResponseGenerator::generate must return no actions if and only if the state is terminal")]
+    fn test_policy_violation_panics_in_debug_builds() {
+        let evaluator = MockStaticEvaluator::new();
+        let generator = MockResponseGenerator::new(); // state 2 is never registered
+        let state = MockGameState::new(1, PlayerId::Alice).with_children(vec![2]);
+
+        let _ = search(&evaluator, &generator, &state, 2);
     }
 }
