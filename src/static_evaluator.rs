@@ -10,6 +10,38 @@
 /// The values returned by the static evaluation function should be in the range [bob_wins_value(), alice_wins_value()]. If the game
 /// is over and Alice has won, then the function should return alice_wins_value(). If the game is over and Bob has won, then the
 /// function should return bob_wins_value().
+///
+/// This trait is consumed by [`minimax::search`](crate::minimax::search). MCTS uses [`ValueEstimator`](crate::mcts::ValueEstimator)
+/// instead, which is current-player-perspective and normalized to `[0.0, 1.0]` rather than Alice-perspective and open-ranged; see
+/// that trait's docs for how to adapt a `StaticEvaluator` into a `ValueEstimator`.
+///
+/// # Examples
+///
+/// ```rust
+/// # use game_player::StaticEvaluator;
+/// # #[derive(Clone)]
+/// # struct TestGameState { material: f32, terminal: bool, alice_wins: bool }
+/// struct MaterialEvaluator;
+///
+/// impl StaticEvaluator for MaterialEvaluator {
+///     type State = TestGameState;
+///
+///     fn evaluate(&self, state: &TestGameState) -> f32 {
+///         if state.terminal {
+///             return if state.alice_wins { self.alice_wins_value() } else { self.bob_wins_value() };
+///         }
+///         // Always from Alice's perspective, e.g. material advantage
+///         state.material
+///     }
+///
+///     fn alice_wins_value(&self) -> f32 { 1000.0 }
+///     fn bob_wins_value(&self) -> f32 { -1000.0 }
+/// }
+///
+/// let evaluator = MaterialEvaluator;
+/// let state = TestGameState { material: 3.5, terminal: false, alice_wins: false };
+/// assert_eq!(evaluator.evaluate(&state), 3.5);
+/// ```
 pub trait StaticEvaluator {
     /// The type representing game states that this evaluator works with
     type State;

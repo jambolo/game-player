@@ -49,17 +49,26 @@ impl PlayerId {
 /// - Duplicate position detection
 /// - State caching and memoization
 ///
+/// [`minimax::search`](crate::minimax::search) relies on `fingerprint()` to key its transposition table.
+/// [`mcts::search`](crate::mcts::search) does not use it at all (MCTS has no transposition table and tracks each
+/// state as a distinct tree node), but the method must still be implemented since it is part of this shared trait -
+/// an MCTS-only consumer may implement it trivially.
+///
 /// ## Turn Management
 /// The trait tracks which player should move next, enabling:
 /// - Alternating play enforcement
 /// - Player-specific evaluation functions
 /// - Turn-based game logic
 ///
+/// Both searches rely on `whose_turn()` for adversarial correctness, but differently: `minimax::search` alternates
+/// maximizing and minimizing by comparing `whose_turn()` to `PlayerId::Alice`, while `mcts::search` compares
+/// `whose_turn()` for equality between a node and its parent to decide whose perspective a value is stored from.
+/// Neither assumes strict ply-by-ply alternation, so games where a player moves twice in a row are supported.
+///
 /// ## State Transitions
-/// Game states can store references to expected responses, allowing:
-/// - Pre-computed move sequences
-/// - Principal variation storage
-/// - Game tree navigation
+/// [`apply`](State::apply) is the only way a state changes: it consumes an action and returns a new state, leaving
+/// the original unchanged. Both `minimax::search` and `mcts::search` call `apply` internally to build out the states
+/// they explore.
 ///
 /// # Examples
 ///

@@ -4,12 +4,26 @@
 
 use std::collections::HashMap;
 
+/// Statistics from a [`TranspositionTable`].
+#[cfg(feature = "analysis_transposition_table")]
+pub struct TranspositionTableStats {
+    /// Fraction of `check()` calls that returned a hit (0.0–1.0). `None` if no checks have been made.
+    pub hit_rate: Option<f32>,
+    /// Fraction of the table's capacity that is occupied (0.0–1.0).
+    pub fill_factor: f32,
+    /// Number of `update()` calls that encountered an already-occupied slot (i.e. a transposition or fingerprint collision).
+    pub collision_count: u64,
+}
+
 /// A map of game state values referenced by the states' fingerprints.
 ///
 /// A game state can be the result of different sequences of the same (or a different) set of moves. This technique is used to cache
 /// the value of a game state regardless of the moves used to reach it, thus the name "transposition" table. The purpose of the
 /// "transposition" table has been extended to become simply a cache of game state values, so it is more aptly named "game state
 /// value cache" -- but the old name persists.
+///
+/// This cache is used internally by [`minimax::search`](crate::minimax::search); [`mcts::search`](crate::mcts::search) does not
+/// use it, since MCTS tracks each state as a distinct tree node rather than caching across move orders.
 ///
 /// # Note
 /// The fingerprint is assumed to be a random and uniformly distributed 64-bit value.
@@ -29,17 +43,6 @@ use std::collections::HashMap;
 ///     assert_eq!(quality, 5);
 /// }
 /// ```
-/// Statistics from a [`TranspositionTable`].
-#[cfg(feature = "analysis_transposition_table")]
-pub struct TranspositionTableStats {
-    /// Fraction of `check()` calls that returned a hit (0.0–1.0). `None` if no checks have been made.
-    pub hit_rate: Option<f32>,
-    /// Fraction of the table's capacity that is occupied (0.0–1.0).
-    pub fill_factor: f32,
-    /// Number of `update()` calls that encountered an already-occupied slot (i.e. a transposition or fingerprint collision).
-    pub collision_count: u64,
-}
-
 pub struct TranspositionTable {
     /// The table of entries
     table: HashMap<u64, Entry>,
