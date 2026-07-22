@@ -48,36 +48,6 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  docs:
-    name: Build and deploy docs
-    if: github.ref == 'refs/heads/master'
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      pages: write
-      contents: read
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Build documentation
-        run: cargo doc --no-deps --workspace
-      - name: Add redirect index
-        run: echo '<meta http-equiv="refresh" content="0; url=game_player/index.html">' > target/doc/index.html
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v6
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: target/doc
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
-
   coverage:
     name: Coverage
     if: github.ref == 'refs/heads/develop'

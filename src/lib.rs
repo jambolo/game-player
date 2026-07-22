@@ -125,17 +125,163 @@
 //!
 //! # Monte Carlo Tree Search
 //!
-//! The crate also provides a Monte Carlo Tree Search implementation in the [`mcts`] module. Integration follows the
-//! same pattern as minimax: implement [`State`], implement [`ResponseGenerator`](mcts::ResponseGenerator) (a trait
-//! distinct from [`ResponseGenerator`](minimax::ResponseGenerator) in the `minimax` module - its `generate` method
-//! takes no depth parameter), and implement [`ValueEstimator`](mcts::ValueEstimator), then call
-//! [`search`](mcts::search).
+//! The crate also provides a Monte Carlo Tree Search (MCTS) implementation in the [`mcts`] module. Integration follows
+//! the same shape as minimax, but the pieces play a different role.
 //!
-//! [`ValueEstimator`](mcts::ValueEstimator) supplies the evaluation MCTS uses in place of, or in addition to, random
-//! playouts: its `estimate` method returns a value in `[0.0, 1.0]` from the perspective of the state's current
-//! player (`state.whose_turn()`), where 0.0 is a loss, 1.0 is a win, and 0.5 is a draw; for terminal states the
-//! returned value must be the exact outcome. Any strategy qualifies, including a random rollout to a terminal
-//! state, a static evaluation function, or a neural network.
+//! ## Key Integration Points
+//!
+//! 1. **Implement [`State`] trait**: The same trait used by minimax - game state management and move application
+//! 2. **Implement [`ValueEstimator`](mcts::ValueEstimator) trait**: Evaluates a state in `[0.0, 1.0]` from the
+//!    perspective of the current player (`state.whose_turn()`), in place of - or in addition to - random playouts
+//! 3. **Implement [`ResponseGenerator`](mcts::ResponseGenerator) trait**: Generates all possible moves from a
+//!    position - a trait distinct from [`ResponseGenerator`](minimax::ResponseGenerator) in the `minimax` module,
+//!    since its `generate` method takes no `depth` parameter
+//! 4. **Use [`search`](mcts::search)**: Combines everything to find the most-visited move
+//!
+//! ## Example
+//!
+//! ```rust
+//! use game_player::{PlayerId, State, StaticEvaluator};
+//! use game_player::mcts::{ResponseGenerator, ValueEstimator, search};
+//!
+//! // Same game structures as the minimax example above
+//! #[derive(Debug, Clone, PartialEq)]
+//! struct GameMove { from: (u8, u8), to: (u8, u8) }
+//!
+//! #[derive(Debug, Clone)]
+//! struct GameState {
+//!     board: u64,               // Simplified board representation
+//!     current_player: PlayerId, // Alice = white, Bob = black
+//!     move_count: u32,
+//! }
+//!
+//! impl GameState {
+//!     fn new() -> Self {
+//!         Self { board: 0x1234567890abcdef, current_player: PlayerId::Alice, move_count: 0 }
+//!     }
+//!
+//!     fn is_game_over(&self) -> bool { self.move_count > 50 }
+//!
+//!     fn get_possible_moves(&self) -> Vec<GameMove> {
+//!         // Simplified: generate a few dummy moves
+//!         vec![
+//!             GameMove { from: (0, 0), to: (1, 1) },
+//!             GameMove { from: (0, 1), to: (1, 0) },
+//!             GameMove { from: (1, 0), to: (2, 0) },
+//!         ]
+//!     }
+//! }
+//!
+//! // 1. Implement the State trait for your game (identical to the minimax example)
+//! impl State for GameState {
+//!     type Action = GameMove;
+//!
+//!     fn fingerprint(&self) -> u64 {
+//!         // MCTS does not use a transposition table, so this can be trivial for
+//!         // an MCTS-only consumer. It is still required because it is part of
+//!         // the shared State trait.
+//!         self.board ^ (self.current_player as u64) << 63 ^ self.move_count as u64
+//!     }
+//!
+//!     fn whose_turn(&self) -> PlayerId {
+//!         self.current_player
+//!     }
+//!
+//!     fn is_terminal(&self) -> bool {
+//!         self.is_game_over()
+//!     }
+//!
+//!     fn apply(&self, game_move: &Self::Action) -> Self {
+//!         Self {
+//!             board: self.board.wrapping_add(1), // Simplified board update
+//!             current_player: self.current_player.other(),
+//!             move_count: self.move_count + 1,
+//!         }
+//!     }
+//! }
+//!
+//! // 2. Implement mcts::ResponseGenerator - note there is no depth parameter, unlike
+//! // minimax::ResponseGenerator
+//! struct GameMoveGenerator;
+//!
+//! impl ResponseGenerator for GameMoveGenerator {
+//!     type State = GameState;
+//!
+//!     fn generate(&self, state: &Self::State) -> Vec<GameMove> {
+//!         state.get_possible_moves()
+//!     }
+//! }
+//!
+//! // 3. Implement ValueEstimator. Here we adapt an existing Alice-perspective
+//! // StaticEvaluator: normalize its output into [0.0, 1.0], then flip perspective for
+//! // Bob so the result is always from state.whose_turn()'s perspective.
+//! struct GameEvaluator;
+//!
+//! impl StaticEvaluator for GameEvaluator {
+//!     type State = GameState;
+//!
+//!     fn evaluate(&self, state: &GameState) -> f32 {
+//!         if state.is_game_over() {
+//!             return 0.0; // Draw
+//!         }
+//!         // Always from Alice's perspective: material advantage relative to baseline
+//!         state.board.count_ones() as f32 - 16.0
+//!     }
+//!
+//!     fn alice_wins_value(&self) -> f32 { 1000.0 }
+//!     fn bob_wins_value(&self) -> f32 { -1000.0 }
+//! }
+//!
+//! struct GameValueEstimator { sef: GameEvaluator }
+//!
+//! impl ValueEstimator for GameValueEstimator {
+//!     type State = GameState;
+//!     type ResponseGenerator = GameMoveGenerator;
+//!
+//!     fn estimate(&self, state: &GameState, _rg: &GameMoveGenerator) -> f32 {
+//!         let eval = self.sef.evaluate(state);
+//!         let v01 = (eval - self.sef.bob_wins_value())
+//!             / (self.sef.alice_wins_value() - self.sef.bob_wins_value());
+//!         if state.whose_turn() == PlayerId::Alice { v01 } else { 1.0 - v01 }
+//!     }
+//! }
+//!
+//! // 4. Use the MCTS search to find the best move
+//! fn find_best_move_mcts() -> Option<GameMove> {
+//!     // Set up the game components
+//!     let initial_state = GameState::new();
+//!     let move_generator = GameMoveGenerator;
+//!     let estimator = GameValueEstimator { sef: GameEvaluator };
+//!
+//!     // Perform MCTS search to find the most-visited action
+//!     search(
+//!         &initial_state,
+//!         &move_generator,
+//!         &estimator,
+//!         game_player::mcts::DEFAULT_EXPLORATION_CONSTANT,
+//!         game_player::mcts::DEFAULT_INITIAL_VALUE_WEIGHT,
+//!         false, // lazy expansion
+//!         1000,  // iterations
+//!     )
+//! }
+//!
+//! // Usage: Create an AI that can play your game
+//! let best_move = find_best_move_mcts();
+//! match best_move {
+//!     Some(action) => println!("MCTS found best move: {:?}", action),
+//!     None => println!("No moves available"),
+//! }
+//! ```
+//!
+//! ## Node Perspective Convention
+//!
+//! A node's statistics (`value_sum`, `initial_value`) are stored from the perspective of the player who chose the
+//! action leading into it - i.e. the `whose_turn()` of the *parent's* state. This is why Selection is a plain argmax
+//! of UCT at every level of the tree (no alternating max/min as in `minimax::search`), and it stays correct for
+//! adversarial play even in games where a player may move twice in a row, since perspective comparisons always use
+//! `whose_turn()` equality rather than ply parity.
+//!
+//! ## Tuning Knobs
 //!
 //! Two parameters tune the search. `initial_value_weight` blends a node's initial value estimate into the UCT
 //! formula as a number of virtual visits; a weight of `0.0` disables the blend, reducing to the standard UCT

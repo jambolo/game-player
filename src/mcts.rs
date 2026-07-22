@@ -19,6 +19,37 @@
 //! eager expansion (`true`: all remaining children created and estimated at once, one estimator call per child, with only
 //! the chosen child's estimate back-propagated) — eager suits cheap estimators such as static evaluation, since it costs
 //! branching-factor-times more estimator calls per expansion than lazy expansion.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use crate::mcts::{search, ResponseGenerator, ValueEstimator, DEFAULT_EXPLORATION_CONSTANT, DEFAULT_INITIAL_VALUE_WEIGHT};
+//!
+//! // Assuming you have implemented the required traits for your game
+//! let response_generator = MyResponseGenerator::new();
+//! let estimator = MyValueEstimator::new();
+//! let initial_state = MyGameState::new();
+//!
+//! if let Some(action) = search(
+//!     &initial_state,
+//!     &response_generator,
+//!     &estimator,
+//!     DEFAULT_EXPLORATION_CONSTANT,
+//!     DEFAULT_INITIAL_VALUE_WEIGHT,
+//!     false, // lazy expansion
+//!     1000,  // iterations
+//! ) {
+//!     println!("Best action found: {:?}", action);
+//!     let next_state = initial_state.apply(&action);
+//! }
+//! ```
+//!
+//! # Notes
+//! - The search assumes a two-player game with perfect information; adversarial play is captured entirely through
+//!   `whose_turn()`, so it is correct even for games where a player may move twice in a row.
+//! - Unlike `minimax::search`, which takes a `max_depth`, MCTS spends a fixed `max_iterations` budget regardless of
+//!   how deep any particular line goes.
+//! - No transposition table is used: states reached by different move orders are treated as distinct nodes.
 
 use crate::state::*;
 use indextree::{Arena, NodeId};
@@ -30,6 +61,27 @@ pub const DEFAULT_EXPLORATION_CONSTANT: f32 = std::f32::consts::SQRT_2;
 pub const DEFAULT_INITIAL_VALUE_WEIGHT: f32 = 0.0;
 
 /// Response generator trait for MCTS search
+///
+/// This trait defines the interface for generating all possible responses from a given state, for use during the
+/// MCTS Expansion phase. It is distinct from [`minimax::ResponseGenerator`](crate::minimax::ResponseGenerator): its
+/// `generate` method takes no `depth` parameter, since MCTS does not track a fixed search depth the way minimax
+/// does.
+///
+/// # Examples
+/// ```rust,ignore
+/// use crate::mcts::ResponseGenerator;
+///
+/// struct MyResponseGenerator;
+///
+/// impl ResponseGenerator for MyResponseGenerator {
+///     type State = MyGameState;
+///
+///     fn generate(&self, state: &Self::State) -> Vec<<Self::State as State>::Action> {
+///         // Enumerate all legal actions for the current player
+///         get_all_valid_moves(state)
+///     }
+/// }
+/// ```
 pub trait ResponseGenerator {
     /// The type representing game states that this generator works with
     type State: State;
@@ -297,6 +349,48 @@ where
 ///
 /// # Panics
 /// This function will panic if the UCT function ever returns NaN.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use crate::mcts::{search, DEFAULT_EXPLORATION_CONSTANT, DEFAULT_INITIAL_VALUE_WEIGHT};
+///
+/// // Set up the search components
+/// let move_generator = MyResponseGenerator::new();
+/// let estimator = MyValueEstimator::new();
+/// let game_state = MyGameState::initial_position();
+///
+/// // Search for 1000 iterations
+/// match search(
+///     &game_state,
+///     &move_generator,
+///     &estimator,
+///     DEFAULT_EXPLORATION_CONSTANT,
+///     DEFAULT_INITIAL_VALUE_WEIGHT,
+///     false, // lazy expansion
+///     1000,
+/// ) {
+///     Some(action) => {
+///         println!("Best action: {:?}", action);
+///         let next_state = game_state.apply(&action);
+///     }
+///     None => println!("No moves available"),
+/// }
+/// ```
+///
+/// # Algorithm Details
+///
+/// The search repeats four phases each iteration:
+/// - **Selection**: Descend from the root by a plain argmax of UCT at every level, stopping at a node that is not
+///   fully expanded, has no children, or is terminal.
+/// - **Expansion**: Add one untried child (lazy, the default), or every untried child at once (eager, when
+///   `estimate_on_expansion` is `true`).
+/// - **Evaluation**: Run the `ValueEstimator` on the newly expanded (or terminal) state.
+/// - **Back-propagation**: Credit the evaluation to the node and all of its ancestors, flipping perspective wherever
+///   `whose_turn()` differs from the leaf's current player.
+///
+/// Unlike `minimax::search`, there is no alternating max/min and no transposition table; adversarial correctness
+/// comes entirely from the perspective bookkeeping described in the module docs.
 pub fn search<S, G, E>(
     s0: &S,
     rg: &G,
