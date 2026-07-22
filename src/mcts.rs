@@ -1210,4 +1210,421 @@ mod tests {
         assert_eq!(children.iter().filter(|&&id| arena[id].get().visits == 0).count(), 1);
         assert_eq!(arena[chosen_id].get().visits, 1);
     }
+
+    // Direct unit test of back_propagate's perspective flip, isolated from a full search.
+    // root(Alice, id0) -> mid(Bob, id1) -> leaf(Alice, id3). A node's stats are stored from
+    // the perspective of whoever chose the move into it: the leaf's stats reflect Bob's
+    // choice (the mid->leaf hop), which disagrees with the leaf's own whose_turn() (Alice),
+    // so the leaf is credited 1-value. Both mid (Alice's choice at the root) and the root
+    // itself agree with the leaf's player (Alice), so they're credited `value` unchanged.
+    #[test]
+    fn test_back_propagate_perspective_three_ply() {
+        let rg = TwoPlyResponseGenerator;
+        let mut arena: Arena<Node<TwoPlyState>> = Arena::new();
+
+        let root_id = arena.new_node(Node::new(TwoPlyState { id: 0 }, None, &rg));
+        let mid_id = arena.new_node(Node::new(TwoPlyState { id: 1 }, Some(TwoPlyAction { id: 0 }), &rg));
+        root_id.append(mid_id, &mut arena);
+        let leaf_id = arena.new_node(Node::new(TwoPlyState { id: 3 }, Some(TwoPlyAction { id: 0 }), &rg));
+        mid_id.append(leaf_id, &mut arena);
+
+        let value = 0.9_f32;
+        back_propagate(leaf_id, &mut arena, value);
+
+        assert_eq!(arena[leaf_id].get().visits, 1);
+        assert!((arena[leaf_id].get().value_sum - (1.0 - value)).abs() < 1e-6);
+
+        assert_eq!(arena[mid_id].get().visits, 1);
+        assert!((arena[mid_id].get().value_sum - value).abs() < 1e-6);
+
+        assert_eq!(arena[root_id].get().visits, 1);
+        assert!((arena[root_id].get().value_sum - value).abs() < 1e-6);
+    }
+
+    // Visit-conservation invariants: every iteration walks exactly one root-to-leaf path,
+    // so after `iterations` iterations the root (visited once up front, then once per
+    // iteration) must have `1 + iterations` visits, and that same iteration count must be
+    // exactly distributed across the root's immediate children.
+    #[test]
+    fn test_mcts_visit_conservation_lazy() {
+        let generator = TestResponseGenerator;
+        let estimator = TestEstimator;
+        let context = Context {
+            response_generator: &generator,
+            estimator: &estimator,
+            c: 1.0,
+            initial_value_weight: 0.0,
+            estimate_on_expansion: false,
+        };
+        let mut arena: Arena<Node<TestGameState>> = Arena::new();
+        let root_state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
+        let root_id = arena.new_node(Node::new(root_state, None, &generator));
+        arena.get_mut(root_id).unwrap().get_mut().visits = 1;
+
+        let iterations = 30;
+        for _ in 0..iterations {
+            let mut node_id = select(root_id, &arena, &context);
+            let expanded = expand(node_id, &mut arena, &context);
+            if let Some(child_id) = expanded {
+                node_id = child_id;
+            }
+            let value = estimate_leaf(node_id, &arena, &context);
+            if expanded.is_some() {
+                let parent_id = arena[node_id].parent().expect("expanded child has a parent");
+                let parent_player = arena[parent_id].get().state.whose_turn();
+                let child_player = arena[node_id].get().state.whose_turn();
+                let stored = if parent_player == child_player { value } else { 1.0 - value };
+                arena[node_id].get_mut().initial_value = Some(stored);
+            }
+            back_propagate(node_id, &mut arena, value);
+        }
+
+        assert_eq!(arena[root_id].get().visits, 1 + iterations);
+        let children_visits: u32 = root_id.children(&arena).map(|c| arena[c].get().visits).sum();
+        assert_eq!(children_visits, iterations);
+    }
+
+    #[test]
+    fn test_mcts_visit_conservation_eager() {
+        let generator = TestResponseGenerator;
+        let estimator = TestEstimator;
+        let context = Context {
+            response_generator: &generator,
+            estimator: &estimator,
+            c: 1.0,
+            initial_value_weight: 0.0,
+            estimate_on_expansion: true,
+        };
+        let mut arena: Arena<Node<TestGameState>> = Arena::new();
+        let root_state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
+        let root_id = arena.new_node(Node::new(root_state, None, &generator));
+        arena.get_mut(root_id).unwrap().get_mut().visits = 1;
+
+        let iterations = 30;
+        for _ in 0..iterations {
+            let node_id = select(root_id, &arena, &context);
+            let (leaf_id, value) = if let Some((child_id, raw)) = expand_eager(node_id, &mut arena, &context) {
+                (child_id, raw)
+            } else {
+                (node_id, estimate_leaf(node_id, &arena, &context))
+            };
+            back_propagate(leaf_id, &mut arena, value);
+        }
+
+        assert_eq!(arena[root_id].get().visits, 1 + iterations);
+        let children_visits: u32 = root_id.children(&arena).map(|c| arena[c].get().visits).sum();
+        assert_eq!(children_visits, iterations);
+    }
+
+    struct SingleEstimator;
+
+    impl ValueEstimator for SingleEstimator {
+        type State = TestGameState;
+        type ResponseGenerator = SingleResponseGenerator;
+
+        fn estimate(&self, _state: &TestGameState, _rg: &SingleResponseGenerator) -> f32 {
+            0.5
+        }
+    }
+
+    // search()-level sanity check: with only one legal action available, it must be the
+    // one returned, regardless of the estimator or exploration constant.
+    #[test]
+    fn test_mcts_search_single_action_is_returned() {
+        let state = TestGameState {
+            value: 0,
+            terminal: false,
+        };
+        let generator = SingleResponseGenerator;
+        let estimator = SingleEstimator;
+
+        let result = search(&state, &generator, &estimator, DEFAULT_EXPLORATION_CONSTANT, 0.0, false, 5);
+        assert_eq!(result.map(|a| a.increment), Some(1));
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct ImmediateState {
+        id: u8,
+    }
+
+    impl State for ImmediateState {
+        type Action = ImmediateAction;
+
+        fn fingerprint(&self) -> u64 {
+            self.id as u64
+        }
+
+        fn whose_turn(&self) -> PlayerId {
+            PlayerId::Alice
+        }
+
+        fn is_terminal(&self) -> bool {
+            self.id != 0
+        }
+
+        fn apply(&self, action: &ImmediateAction) -> Self {
+            Self { id: action.id }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct ImmediateAction {
+        id: u8,
+    }
+
+    struct ImmediateResponseGenerator;
+
+    impl ResponseGenerator for ImmediateResponseGenerator {
+        type State = ImmediateState;
+
+        fn generate(&self, state: &ImmediateState) -> Vec<ImmediateAction> {
+            if state.is_terminal() {
+                vec![]
+            } else {
+                vec![ImmediateAction { id: 1 }, ImmediateAction { id: 2 }]
+            }
+        }
+    }
+
+    struct ImmediateEstimator;
+
+    impl ValueEstimator for ImmediateEstimator {
+        type State = ImmediateState;
+        type ResponseGenerator = ImmediateResponseGenerator;
+
+        // Terminal states return their exact outcome: id 1 is a win, id 2 a loss.
+        fn estimate(&self, state: &ImmediateState, _rg: &ImmediateResponseGenerator) -> f32 {
+            match state.id {
+                1 => 1.0,
+                2 => 0.0,
+                _ => 0.5,
+            }
+        }
+    }
+
+    // Basic value-sensitivity check: given a choice between an immediate win and an
+    // immediate loss, the search must prefer the win well before its iteration budget
+    // is exhausted.
+    #[test]
+    fn test_mcts_prefers_immediate_win_over_loss() {
+        let root = ImmediateState { id: 0 };
+        let rg = ImmediateResponseGenerator;
+        let estimator = ImmediateEstimator;
+        let result = search(&root, &rg, &estimator, DEFAULT_EXPLORATION_CONSTANT, 0.0, false, 30);
+        assert_eq!(result, Some(ImmediateAction { id: 1 }));
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct DoubleMoveState {
+        id: u8,
+    }
+
+    impl State for DoubleMoveState {
+        type Action = DoubleMoveAction;
+
+        fn fingerprint(&self) -> u64 {
+            self.id as u64
+        }
+
+        // Alice moves on every ply: this is the "double move" case the module docs call
+        // out, where perspective must track whose_turn() equality rather than ply parity.
+        fn whose_turn(&self) -> PlayerId {
+            PlayerId::Alice
+        }
+
+        fn is_terminal(&self) -> bool {
+            self.id >= 3
+        }
+
+        fn apply(&self, action: &DoubleMoveAction) -> Self {
+            let id = match (self.id, action.id) {
+                (0, 0) => 1,
+                (0, 1) => 2,
+                (1, 0) => 3,
+                (1, 1) => 4,
+                (2, 0) => 5,
+                (2, 1) => 6,
+                _ => panic!("illegal action"),
+            };
+            Self { id }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct DoubleMoveAction {
+        id: u8,
+    }
+
+    struct DoubleMoveResponseGenerator;
+
+    impl ResponseGenerator for DoubleMoveResponseGenerator {
+        type State = DoubleMoveState;
+
+        fn generate(&self, state: &DoubleMoveState) -> Vec<DoubleMoveAction> {
+            if state.is_terminal() {
+                vec![]
+            } else {
+                vec![DoubleMoveAction { id: 0 }, DoubleMoveAction { id: 1 }]
+            }
+        }
+    }
+
+    struct DoubleMoveEstimator;
+
+    impl ValueEstimator for DoubleMoveEstimator {
+        type State = DoubleMoveState;
+        type ResponseGenerator = DoubleMoveResponseGenerator;
+
+        fn estimate(&self, state: &DoubleMoveState, _rg: &DoubleMoveResponseGenerator) -> f32 {
+            match state.id {
+                3 => 0.9,
+                4 => 0.2,
+                5 => 0.3,
+                6 => 0.6,
+                _ => 0.5,
+            }
+        }
+    }
+
+    // Alice moves twice in a row (id0 -> id1/id2 -> terminal) with no adversary at any
+    // level. Correct play is pure maximization along both plies: from id1 the best line
+    // reaches 0.9, from id2 the best line reaches 0.6, so the root must prefer id1 (a0).
+    // A perspective scheme keyed on ply parity instead of whose_turn() equality would
+    // wrongly flip credit between these two same-player hops and could corrupt this
+    // choice; this reproduces the exact scenario module docs warn about ("a player may
+    // move twice in a row in some games").
+    #[test]
+    fn test_mcts_double_move_same_player() {
+        let root = DoubleMoveState { id: 0 };
+        let rg = DoubleMoveResponseGenerator;
+        let estimator = DoubleMoveEstimator;
+        let result = search(&root, &rg, &estimator, DEFAULT_EXPLORATION_CONSTANT, 0.0, false, 500);
+        assert_eq!(result, Some(DoubleMoveAction { id: 0 }));
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct ThreePlyState {
+        id: u8,
+    }
+
+    impl State for ThreePlyState {
+        type Action = ThreePlyAction;
+
+        fn fingerprint(&self) -> u64 {
+            self.id as u64
+        }
+
+        fn whose_turn(&self) -> PlayerId {
+            match self.id {
+                1 | 2 => PlayerId::Bob,
+                _ => PlayerId::Alice,
+            }
+        }
+
+        fn is_terminal(&self) -> bool {
+            self.id >= 7
+        }
+
+        fn apply(&self, action: &ThreePlyAction) -> Self {
+            let id = match (self.id, action.id) {
+                (0, 0) => 1,
+                (0, 1) => 2,
+                (1, 0) => 3,
+                (1, 1) => 4,
+                (2, 0) => 5,
+                (2, 1) => 6,
+                (3, 0) => 7,
+                (3, 1) => 8,
+                (4, 0) => 9,
+                (4, 1) => 10,
+                (5, 0) => 11,
+                (5, 1) => 12,
+                (6, 0) => 13,
+                (6, 1) => 14,
+                _ => panic!("illegal action"),
+            };
+            Self { id }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct ThreePlyAction {
+        id: u8,
+    }
+
+    struct ThreePlyResponseGenerator;
+
+    impl ResponseGenerator for ThreePlyResponseGenerator {
+        type State = ThreePlyState;
+
+        fn generate(&self, state: &ThreePlyState) -> Vec<ThreePlyAction> {
+            if state.is_terminal() {
+                vec![]
+            } else {
+                vec![ThreePlyAction { id: 0 }, ThreePlyAction { id: 1 }]
+            }
+        }
+    }
+
+    struct ThreePlyEstimator;
+
+    impl ValueEstimator for ThreePlyEstimator {
+        type State = ThreePlyState;
+        type ResponseGenerator = ThreePlyResponseGenerator;
+
+        fn estimate(&self, state: &ThreePlyState, _rg: &ThreePlyResponseGenerator) -> f32 {
+            match state.id {
+                7 => 0.9,
+                8 => 0.2,
+                9 => 0.1,
+                10 => 0.3,
+                11 => 0.6,
+                12 => 0.4,
+                13 => 0.5,
+                14 => 0.7,
+                _ => 0.5,
+            }
+        }
+    }
+
+    // Alice-Bob-Alice, 8 terminal leaves:
+    //   id1 (Bob) chooses between id3 (Alice's best reachable = max(0.9, 0.2) = 0.9)
+    //             and id4 (Alice's best reachable = max(0.1, 0.3) = 0.3) -> minimizes to 0.3
+    //   id2 (Bob) chooses between id5 (Alice's best reachable = max(0.6, 0.4) = 0.6)
+    //             and id6 (Alice's best reachable = max(0.5, 0.7) = 0.7) -> minimizes to 0.6
+    // Alice maximizes at the root: 0.6 (via id2, action a1) > 0.3 (via id1, action a0).
+    // A max-max search that ignored Bob's minimization would instead chase the 0.9 leaf
+    // under id1 and wrongly pick a0. This extends the module's 2-ply adversarial check to
+    // a deeper tree with two independent Bob-minimizing subtrees.
+    #[test]
+    fn test_mcts_three_ply_adversarial_minimax() {
+        let root = ThreePlyState { id: 0 };
+        let rg = ThreePlyResponseGenerator;
+        let estimator = ThreePlyEstimator;
+        let result = search(&root, &rg, &estimator, DEFAULT_EXPLORATION_CONSTANT, 0.0, false, 3000);
+        assert_eq!(result, Some(ThreePlyAction { id: 1 }));
+    }
+
+    // The 2-ply adversarial fixture's correct answer (a1) must hold regardless of
+    // expansion strategy (lazy/eager) or initial-value weighting.
+    #[test]
+    fn test_mcts_adversarial_correctness_across_modes() {
+        let rg = TwoPlyResponseGenerator;
+        let estimator = TwoPlyEstimator;
+        for &(eager, w) in &[(false, 0.0_f32), (true, 0.0), (true, 1.0), (false, 1.0)] {
+            let root = TwoPlyState { id: 0 };
+            let result = search(&root, &rg, &estimator, DEFAULT_EXPLORATION_CONSTANT, w, eager, 200);
+            assert_eq!(
+                result,
+                Some(TwoPlyAction { id: 1 }),
+                "failed for estimate_on_expansion={eager}, initial_value_weight={w}"
+            );
+        }
+    }
 }
