@@ -98,7 +98,7 @@ jobs:
       - name: Add index redirect
         run: echo '<meta http-equiv="refresh" content="0; url=game_player/index.html">' > target/doc/index.html
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
