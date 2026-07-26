@@ -8,9 +8,11 @@ worked example, using tic-tac-toe as the game.
 ## Contents
 
 - [Overview](#overview)
+  - [The no-legal-moves policy](#the-no-legal-moves-policy)
 - [Choosing a Search Algorithm](#choosing-a-search-algorithm)
 - [The Minimax Algorithm](#the-minimax-algorithm)
 - [The MCTS Algorithm](#the-mcts-algorithm)
+  - [The built-in `RandomPlayoutEstimator`](#the-built-in-randomplayoutestimator)
 - [Example: A Tic-Tac-Toe Player Using Minimax](#example-a-tic-tac-toe-player-using-minimax)
 - [Example: A Tic-Tac-Toe Player Using MCTS](#example-a-tic-tac-toe-player-using-mcts)
 - [Where to Go From Here](#where-to-go-from-here)
@@ -60,7 +62,8 @@ if let Some(action) = mcts::search(
 }
 ```
 
-Both searches return the best action found for the player whose turn it is, or `None` if that player has no legal responses.
+Both searches return the best action found for the player whose turn it is, or `None` if `s0` itself is terminal (see
+[The no-legal-moves policy](#the-no-legal-moves-policy)).
 
 ### The players: Alice and Bob
 
@@ -83,13 +86,33 @@ honored. Violating either one makes the corresponding search choose wrong moves.
   where Bob has won to `bob_wins_value()`.
 - **`ValueEstimator::estimate` (MCTS) is from the perspective of the player to move** (`state.whose_turn()`), and its value
   must lie in `[0.0, 1.0]`: `0.0` means a certain loss for that player, `1.0` a certain win, `0.5` a draw. For terminal
-  states the returned value must be the exact outcome.
+  states the returned value must be the exact outcome. `0.0` and `1.0` are reserved for that certainty — see
+  [the `ValueEstimator` contract](#the-valueestimator-contract).
 
 ### What the searches assume
 
 Both searches assume a **two-player, zero-sum game with perfect information**: what is good for one player is exactly as bad
 for the other, and both players can see the whole position. Classic examples are tic-tac-toe, checkers, chess, reversi, and
 connect-four.
+
+### The no-legal-moves policy
+
+Both searches treat an empty result from `generate` as the definitive signal that a position is the end of the game — neither
+`minimax::search` nor `mcts::search` ever calls `State::is_terminal()` itself. This means the two must always agree: your
+`generate` implementation must return **at least one action** whenever `is_terminal()` is `false`, and **no actions** when
+it's `true`.
+
+If the rules of your game force a player to skip a turn — no legal move exists, but play continues — the game has *not*
+ended, so `generate` must still return something: add an explicit "pass" action to your `Action` type and apply it as a
+no-op move (typically just flipping `whose_turn()`). Reserve an empty `Vec` strictly for positions where `is_terminal()` is
+`true`. A forced resignation, by contrast, ends the game immediately — model that by making `is_terminal()` `true` for the
+resulting position rather than inventing a "resign" action.
+
+Getting this backwards is silent and easy to miss: a `generate` that returns `[]` for a merely-stuck-but-ongoing position
+makes the search treat that position as the final outcome, using whatever static value or estimate it already has for it
+instead of searching further. Both `minimax::search` and `mcts::search` run a debug assertion right after every call to
+`generate` that panics if its result's emptiness ever disagrees with `is_terminal()`, so a violation surfaces immediately in
+a debug or test build rather than degrading search quality silently.
 
 ## Choosing a Search Algorithm
 
@@ -183,7 +206,8 @@ guidance:
 - For larger games, pick the largest depth that stays within your time budget, and prefer even depths ending after the
   *opponent's* reply so the evaluation isn't skewed by one side having just moved (the horizon effect).
 - Descent stops early at any position whose value already indicates a win, and at any position for which the response generator
-  returns no moves — so make your generator return an empty `Vec` for terminal positions.
+  returns no moves — so make your generator return an empty `Vec` for terminal positions only, and at least one move (e.g. a
+  "pass") for every other position (see [The no-legal-moves policy](#the-no-legal-moves-policy)).
 
 ## The MCTS Algorithm
 
@@ -231,9 +255,77 @@ Any strategy that produces such a value qualifies: a random playout to the end o
 the `rg` argument to generate moves), a static evaluation, a neural network. The estimator is pluggable precisely so you can
 start with something cheap and swap in something stronger later.
 
+**Reserve `0.0` and `1.0` for certainty.** Those boundary values mean "this outcome is decided," so only return them when it
+actually is: a terminal state's exact outcome, or a rollout that played all the way to one. A heuristic that stops short of
+the end of the game — a static evaluation, a lookahead cut off at some depth, a neural network's confidence score — is an
+opinion, not a proof, and should stay strictly inside `(0.0, 1.0)` even when it's very confident, for example by clamping
+just shy of the boundary. Otherwise a merely strong-looking but undecided position becomes indistinguishable, in the
+search's accumulated statistics, from one that is actually won or lost.
+
 If you already have an Alice-perspective `StaticEvaluator`, you can adapt it: normalize its output into `[0.0, 1.0]` with
 `v01 = (eval - bob_wins_value()) / (alice_wins_value() - bob_wins_value())`, then return `v01` when `whose_turn()` is Alice
-and `1.0 - v01` when it is Bob. The MCTS example below does exactly this.
+and `1.0 - v01` when it is Bob. The MCTS example below does exactly this. This naturally respects the certainty-reservation
+above too, as long as the wrapped `StaticEvaluator` respects its own contract of returning `alice_wins_value()` /
+`bob_wins_value()` only for an actual win — never as a heuristic's high-confidence guess.
+
+### The built-in `RandomPlayoutEstimator`
+
+Writing the classic rollout estimator by hand is repetitive enough that the crate ships one:
+`game_player::random_playout::RandomPlayoutEstimator<G>`. It repeatedly samples a uniformly-random action from
+`rg.generate(state)` and applies it until the state is terminal, then reports the result — exactly the "play random legal
+moves until the game ends" strategy described above.
+
+It is behind the `mcts_random_playout` feature flag, off by default, because it needs a random number generator and the crate
+does not want to force a `rand` dependency onto callers who bring their own estimator (a static evaluation or a neural
+network, say — the common case). Enable it in `Cargo.toml`:
+
+```toml
+game-player = { version = "...", features = ["mcts_random_playout"] }
+```
+
+Two things to know before using it:
+
+- **Your state needs one more trait.** `State` only exposes `is_terminal()` — it has no generic way to say *who* won, which a
+  playout needs to know once it reaches the end. So `RandomPlayoutEstimator` requires `G::State` to also implement
+  `random_playout::TerminalOutcome`, a single-method trait:
+
+  ```rust
+  trait TerminalOutcome: State {
+      /// Same contract as `ValueEstimator::estimate` on a terminal state: [0.0, 1.0] from the
+      /// perspective of `self.whose_turn()`. Only ever called when `is_terminal()` is true.
+      fn outcome(&self) -> f32;
+  }
+  ```
+
+  For tic-tac-toe this is a small addition to `Board`:
+
+  ```rust
+  use game_player::random_playout::TerminalOutcome;
+
+  impl TerminalOutcome for Board {
+      fn outcome(&self) -> f32 {
+          match self.winner() {
+              Some(winner) if winner == self.whose_turn() => 1.0,
+              Some(_) => 0.0,
+              None => 0.5, // Draw (is_full()).
+          }
+      }
+  }
+  ```
+
+- **It carries its own RNG, seeded for reproducibility.** Construct it with `RandomPlayoutEstimator::new(seed)`; the same
+  seed and the same sequence of `estimate()` calls always produce the same playouts, so a search built on it stays
+  reproducible run to run (as long as it isn't shared across concurrent searches).
+
+Putting it together, in place of a hand-written `LinesEstimator`:
+
+```rust
+use game_player::random_playout::RandomPlayoutEstimator;
+
+let estimator = RandomPlayoutEstimator::<MctsMoves>::new(42);
+```
+
+The rest of the search call is unchanged — `estimator` still just needs to satisfy `mcts::ValueEstimator`.
 
 ### How MCTS stays adversarial
 
@@ -442,7 +534,10 @@ Any win value with magnitude safely above the heuristic's range works; `±100.0`
 ### The move generator
 
 Every empty square is a legal move — unless the game is already over, in which case there are no responses. Returning an empty
-`Vec` for terminal positions is what stops the search (and the game loop below) from playing past the end of the game:
+`Vec` for terminal positions is what stops the search (and the game loop below) from playing past the end of the game; per
+[the no-legal-moves policy](#the-no-legal-moves-policy), an empty `Vec` must be reserved for exactly that case. Tic-tac-toe
+never has a position where a player is merely stuck with the game still ongoing, so no "pass" action is needed here — a game
+that can produce such a position must add one (see [Where to Go From Here](#where-to-go-from-here)):
 
 ```rust
 use game_player::minimax::ResponseGenerator;
@@ -561,7 +656,9 @@ impl mcts::ResponseGenerator for MctsMoves {
 ### The value estimator
 
 The classic MCTS estimator is a random playout: play random legal moves (via the `rg` argument) until the game ends, and
-report the outcome. Here we instead demonstrate adapting the *lines* heuristic from the minimax evaluator, following the
+report the outcome. The crate ships one — see
+[The built-in `RandomPlayoutEstimator`](#the-built-in-randomplayoutestimator) — but it lives behind an off-by-default feature
+flag and needs an RNG, so here we instead demonstrate adapting the *lines* heuristic from the minimax evaluator, following the
 recipe in [the `ValueEstimator` contract](#the-valueestimator-contract): compute the Alice-perspective score, rescale it into
 `[0.0, 1.0]`, and flip it when it is Bob's turn. This also makes the example fully deterministic — no RNG anywhere.
 
@@ -675,12 +772,15 @@ To adapt these patterns to your own game:
 
 1. Replace `Placement`/`Board` with your game's action and state, keeping `apply` non-mutating and `fingerprint` a faithful
    position hash (use Zobrist hashing when the state doesn't fit in 64 bits).
-2. Generate all legal moves, including explicit "pass" actions if your game forces passes; return an empty `Vec` only when the
-   player truly cannot respond. If you use both searches, implement both `ResponseGenerator` traits over one shared
+2. Generate all legal moves, per [the no-legal-moves policy](#the-no-legal-moves-policy): include an explicit "pass" action
+   whenever the rules force a player to skip a turn without ending the game, and return an empty `Vec` only when
+   `is_terminal()` is `true`. If you use both searches, implement both `ResponseGenerator` traits over one shared
    move-listing function.
 3. For **minimax**: write an evaluator that captures what "winning" looks like in your game — material, mobility, territory —
    always from Alice's perspective and always within `[bob_wins_value(), alice_wins_value()]`; then tune `max_depth` to your
    time budget.
 4. For **MCTS**: write an estimator that returns `[0.0, 1.0]` from the current player's perspective — start with a random
-   playout or a rescaled static evaluation and swap in something stronger later; then tune `max_iterations` to your time
-   budget, and reach for `initial_value_weight`/`estimate_on_expansion` once you have a cheap estimator worth trusting.
+   playout (the crate ships one behind the `mcts_random_playout` feature; see
+   [The built-in `RandomPlayoutEstimator`](#the-built-in-randomplayoutestimator)) or a rescaled static evaluation, and swap in
+   something stronger later; then tune `max_iterations` to your time budget, and reach for
+   `initial_value_weight`/`estimate_on_expansion` once you have a cheap estimator worth trusting.

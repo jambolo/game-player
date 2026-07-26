@@ -11,7 +11,10 @@
 //!
 //! 1. **Implement [`State`] trait**: Provides game state management and move application with associated Action type
 //! 2. **Implement [`StaticEvaluator`] trait**: Evaluates how good a position is for each player
-//! 3. **Implement [`ResponseGenerator`](minimax::ResponseGenerator) trait**: Generates all possible moves from a position
+//! 3. **Implement [`ResponseGenerator`](minimax::ResponseGenerator) trait**: Generates all possible moves from a
+//!    position - returning no moves is the search's sole signal that the position ends the game, so a non-terminal
+//!    position must always yield at least one move (e.g. an explicit "pass"); see the policy documented on
+//!    [`ResponseGenerator::generate`](minimax::ResponseGenerator::generate)
 //! 4. **Use [`search`](minimax::search)**: Combines everything to find the optimal move
 //!
 //! ## Example
@@ -39,7 +42,9 @@
 //!     fn is_game_over(&self) -> bool { self.move_count > 50 }
 //!
 //!     fn get_possible_moves(&self) -> Vec<GameMove> {
-//!         // Simplified: generate a few dummy moves
+//!         // Simplified: generate a few dummy moves. A real implementation must return at least one
+//!         // move whenever `is_game_over()` is false (e.g. a "pass" move if the rules force one) and no
+//!         // moves when `is_game_over()` is true - see the ResponseGenerator::generate policy docs.
 //!         vec![
 //!             GameMove { from: (0, 0), to: (1, 1) },
 //!             GameMove { from: (0, 1), to: (1, 0) },
@@ -135,7 +140,8 @@
 //!    perspective of the current player (`state.whose_turn()`), in place of - or in addition to - random playouts
 //! 3. **Implement [`ResponseGenerator`](mcts::ResponseGenerator) trait**: Generates all possible moves from a
 //!    position - a trait distinct from [`ResponseGenerator`](minimax::ResponseGenerator) in the `minimax` module,
-//!    since its `generate` method takes no `depth` parameter
+//!    since its `generate` method takes no `depth` parameter. The same no-legal-moves policy applies: see
+//!    [`ResponseGenerator::generate`](mcts::ResponseGenerator::generate)
 //! 4. **Use [`search`](mcts::search)**: Combines everything to find the most-visited move
 //!
 //! ## Example
@@ -163,7 +169,9 @@
 //!     fn is_game_over(&self) -> bool { self.move_count > 50 }
 //!
 //!     fn get_possible_moves(&self) -> Vec<GameMove> {
-//!         // Simplified: generate a few dummy moves
+//!         // Simplified: generate a few dummy moves. A real implementation must return at least one
+//!         // move whenever `is_game_over()` is false (e.g. a "pass" move if the rules force one) and no
+//!         // moves when `is_game_over()` is true - see the ResponseGenerator::generate policy docs.
 //!         vec![
 //!             GameMove { from: (0, 0), to: (1, 1) },
 //!             GameMove { from: (0, 1), to: (1, 0) },
@@ -295,6 +303,8 @@
 
 pub mod mcts;
 pub mod minimax;
+#[cfg(feature = "mcts_random_playout")]
+pub mod random_playout;
 pub mod state;
 pub mod static_evaluator;
 pub mod transposition_table;

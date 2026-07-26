@@ -186,6 +186,16 @@ pub trait State: Clone {
     /// # Returns
     /// `true` if the game cannot continue, `false` otherwise.
     ///
+    /// # Policy: Must Agree With Response Generation
+    /// Neither [`minimax::search`](crate::minimax::search) nor [`mcts::search`](crate::mcts::search) calls this method - they
+    /// determine that a state ends the game purely from the corresponding `ResponseGenerator::generate` returning no actions
+    /// (see the policy documented on [`minimax::ResponseGenerator::generate`](crate::minimax::ResponseGenerator::generate) and
+    /// [`mcts::ResponseGenerator::generate`](crate::mcts::ResponseGenerator::generate)). For the two searches to behave
+    /// correctly, `is_terminal()` must therefore agree exactly with `generate`: `true` if and only if `generate` returns no
+    /// actions for this state. `is_terminal()` still matters beyond the searches themselves - callers' own game loops and
+    /// helpers such as the `mcts_random_playout`-gated `RandomPlayoutEstimator` rely on it directly - so it must be
+    /// implemented even though the core search traversal never queries it.
+    ///
     /// # Examples
     /// ```rust
     /// # use game_player::{State, PlayerId};
