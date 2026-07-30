@@ -29,7 +29,24 @@ pub trait TerminalOutcome: State {
     fn outcome(&self) -> f32;
 }
 
-/// A [`ValueEstimator`] that plays uniformly-random actions out to a terminal state (the classic MCTS
+/// A [`ResponseGenerator`] that can sample a single random action, optionally faster than listing them all.
+///
+/// The default implementation calls [`ResponseGenerator::generate`] and picks uniformly from the result, so a game
+/// with no cheaper sampler only needs an empty `impl RandomActionSource for MyGenerator {}`. Override
+/// [`random_action`](Self::random_action) when an action can be sampled without enumerating all of them.
+///
+/// The override must keep the crate's no-legal-moves policy: return `None` if and only if `state.is_terminal()`
+/// (a forced pass must be returned as an explicit pass action). [`RandomPlayoutEstimator`] never calls it on a
+/// terminal state, and panics if `None` is returned for a non-terminal state. The sampling distribution need
+/// not be uniform over `generate`'s actions, but the returned action must be one `generate` would list.
+pub trait RandomActionSource: ResponseGenerator {
+    /// Returns a random legal action for `state`, or `None` if `state` is terminal.
+    fn random_action(&self, state: &Self::State, rng: &mut StdRng) -> Option<<Self::State as State>::Action> {
+        self.generate(state).choose(rng).cloned()
+    }
+}
+
+/// A [`ValueEstimator`] that plays random actions out to a terminal state (the classic MCTS
 /// rollout) and returns the result.
 ///
 /// Requires `G::State` to implement [`TerminalOutcome`] in addition to [`State`], since a generic
@@ -54,7 +71,7 @@ impl<G> RandomPlayoutEstimator<G> {
 
 impl<G> ValueEstimator for RandomPlayoutEstimator<G>
 where
-    G: ResponseGenerator,
+    G: RandomActionSource,
     G::State: TerminalOutcome,
 {
     type State = G::State;
@@ -63,7 +80,8 @@ where
     fn estimate(&self, state: &Self::State, rg: &G) -> f32 {
         let perspective = state.whose_turn();
         let mut current = state.clone();
-        let mut rng = self.rng.borrow_mut();
+        let mut guard = self.rng.borrow_mut();
+        let rng = &mut *guard;
         loop {
             if current.is_terminal() {
                 let outcome = current.outcome();
@@ -74,13 +92,12 @@ where
                 };
             }
             // Per the crate's policy (see mcts::ResponseGenerator::generate), a non-terminal state must always
-            // yield at least one action - a "pass" if the rules force one - so an empty result here is a policy
-            // violation in the caller's ResponseGenerator, not a legitimate end of the playout.
-            let actions = rg.generate(&current);
-            let action = actions
-                .choose(&mut *rng)
-                .expect("ResponseGenerator::generate returned no actions for a non-terminal state (policy violation)");
-            current = current.apply(action);
+            // yield an action - a "pass" if the rules force one - so `None` here is a policy violation in the
+            // caller's RandomActionSource/ResponseGenerator, not a legitimate end of the playout.
+            let action = rg
+                .random_action(&current, rng)
+                .expect("RandomActionSource::random_action returned no action for a non-terminal state (policy violation)");
+            current = current.apply(&action);
         }
     }
 }
@@ -141,6 +158,8 @@ mod tests {
             if state.is_terminal() { vec![] } else { vec![CountdownAction] }
         }
     }
+
+    impl RandomActionSource for CountdownResponseGenerator {}
 
     #[test]
     fn test_deterministic_playout_matches_exact_outcome() {
@@ -229,6 +248,8 @@ mod tests {
         }
     }
 
+    impl RandomActionSource for NimResponseGenerator {}
+
     #[test]
     fn test_random_playout_stays_in_range() {
         let rg = NimResponseGenerator;
@@ -257,5 +278,62 @@ mod tests {
         let sequence_a: Vec<f32> = (0..20).map(|_| a.estimate(&state, &rg)).collect();
         let sequence_b: Vec<f32> = (0..20).map(|_| b.estimate(&state, &rg)).collect();
         assert_eq!(sequence_a, sequence_b);
+    }
+
+    // A generator overriding `random_action` with a sampler that never calls `generate`.
+    struct FastNimResponseGenerator;
+
+    impl ResponseGenerator for FastNimResponseGenerator {
+        type State = NimState;
+
+        fn generate(&self, _state: &NimState) -> Vec<NimAction> {
+            panic!("generate must not be called when random_action is overridden");
+        }
+    }
+
+    impl RandomActionSource for FastNimResponseGenerator {
+        fn random_action(&self, state: &NimState, rng: &mut StdRng) -> Option<NimAction> {
+            use rand::RngExt;
+            (state.stones > 0).then(|| NimAction {
+                take: rng.random_range(1..=2u8.min(state.stones)),
+            })
+        }
+    }
+
+    #[test]
+    fn test_overridden_random_action_is_used() {
+        let rg = FastNimResponseGenerator;
+        let estimator = RandomPlayoutEstimator::<FastNimResponseGenerator>::new(5);
+        let state = NimState {
+            stones: 10,
+            turn: PlayerId::Alice,
+        };
+        for _ in 0..50 {
+            assert!((0.0..=1.0).contains(&estimator.estimate(&state, &rg)));
+        }
+    }
+
+    // Violates the policy: reports no action for a non-terminal state.
+    struct EmptyResponseGenerator;
+
+    impl ResponseGenerator for EmptyResponseGenerator {
+        type State = NimState;
+
+        fn generate(&self, _state: &NimState) -> Vec<NimAction> {
+            vec![]
+        }
+    }
+
+    impl RandomActionSource for EmptyResponseGenerator {}
+
+    #[test]
+    #[should_panic(expected = "returned no action for a non-terminal state")]
+    fn test_none_for_non_terminal_state_panics() {
+        let estimator = RandomPlayoutEstimator::<EmptyResponseGenerator>::new(1);
+        let state = NimState {
+            stones: 3,
+            turn: PlayerId::Alice,
+        };
+        estimator.estimate(&state, &EmptyResponseGenerator);
     }
 }

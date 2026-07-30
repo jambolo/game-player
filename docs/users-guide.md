@@ -271,8 +271,8 @@ above too, as long as the wrapped `StaticEvaluator` respects its own contract of
 ### The built-in `RandomPlayoutEstimator`
 
 Writing the classic rollout estimator by hand is repetitive enough that the crate ships one:
-`game_player::random_playout::RandomPlayoutEstimator<G>`. It repeatedly samples a uniformly-random action from
-`rg.generate(state)` and applies it until the state is terminal, then reports the result — exactly the "play random legal
+`game_player::random_playout::RandomPlayoutEstimator<G>`. It repeatedly samples a random action (by default uniformly from
+`rg.generate(state)`) and applies it until the state is terminal, then reports the result — exactly the "play random legal
 moves until the game ends" strategy described above.
 
 It is behind the `mcts_random_playout` feature flag, off by default, because it needs a random number generator and the crate
@@ -283,7 +283,16 @@ network, say — the common case). Enable it in `Cargo.toml`:
 game-player = { version = "...", features = ["mcts_random_playout"] }
 ```
 
-Two things to know before using it:
+Three things to know before using it:
+
+- **Your generator needs `RandomActionSource`.** `G` must implement `random_playout::RandomActionSource`, whose one method
+  `random_action(&self, state, rng) -> Option<Action>` has a default that calls `generate` and picks one. Opt in with an
+  empty impl, or override the method when an action can be sampled without listing them all (return `None` if and only
+  if the state is terminal):
+
+  ```rust
+  impl RandomActionSource for MctsMoves {}
+  ```
 
 - **Your state needs one more trait.** `State` only exposes `is_terminal()` — it has no generic way to say *who* won, which a
   playout needs to know once it reaches the end. So `RandomPlayoutEstimator` requires `G::State` to also implement

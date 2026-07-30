@@ -6,8 +6,8 @@ description = "Basic components for implementing an AI player in a two-person ga
 authors = ["John Bolton"]
 
 [dependencies]
-indextree = "4.7"
-rand = { version = "0.10.2", default-features = false, features = ["std", "std_rng"], optional = true }
+indextree = "4.9"
+rand = { version = "0.10.4", default-features = false, features = ["std", "std_rng"], optional = true }
 serde_json = { version = "1.0", optional = true }
 
 [features]
